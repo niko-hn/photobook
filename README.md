@@ -45,7 +45,10 @@ python3 ../photobook.py --open
 - Each page holds 1-3 photos in one of several varying layouts, framed like
   real photos.
 - Click a photo to zoom it to a full, framed view on black; click again (or
-  press Escape) to zoom back out.
+  press Escape) to zoom back out. Outside edit mode, pressing 1-9 does the
+  same thing for the photo in that position on the current spread (left
+  page first, then the right page continuing on - same numbering edit
+  mode's badges use, just not shown here).
 - **Edit mode**: click the book's background, or press space, to toggle it.
   Each page then shows a black button (L on the left page, R on the right)
   that auto-relayouts just that page - same photos, new arrangement; press

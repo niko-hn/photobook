@@ -1018,6 +1018,15 @@ function findBadgeTarget(num){
   return null;
 }
 
+// The move-btn badges carry data-page-idx/data-photo-idx and exist in the
+// DOM (just visually hidden outside edit mode), so they double as a way to
+// find a given photo's <img> on screen without a separate lookup table.
+function findPhotoImg(pageIdx, photoIdx){
+  const btn = document.querySelector(`.move-btn[data-page-idx="${pageIdx}"][data-photo-idx="${photoIdx}"]`);
+  const frame = btn ? btn.closest('.frame') : null;
+  return frame ? frame.querySelector('img') : null;
+}
+
 function handleMoveButtonClick(pageIdx, photoIdx){
   const photo = DATA.pages[pageIdx].photos[photoIdx];
   if (!photo) return;
@@ -1132,6 +1141,12 @@ document.addEventListener('keydown', (e) => {
   if (editMode && !animating && /^[1-9]$/.test(e.key)){
     const target = findBadgeTarget(parseInt(e.key, 10));
     if (target) handleMoveButtonClick(target.pageIdx, target.photoIdx);
+    return;
+  }
+  if (!editMode && !animating && /^[1-9]$/.test(e.key)){
+    const target = findBadgeTarget(parseInt(e.key, 10));
+    const img = target ? findPhotoImg(target.pageIdx, target.photoIdx) : null;
+    if (img) openLightbox(img);
     return;
   }
   if (e.key === 'ArrowRight') go(1);
