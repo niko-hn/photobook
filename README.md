@@ -13,7 +13,9 @@ python3 photobook.py
 ```
 
 Then open the printed URL (default `http://localhost:8000/`) in your browser.
-From WSL, `localhost` URLs work directly in your Windows browser.
+Works the same way from WSL (Windows), Termux (Android - see below), or any
+regular desktop terminal: the server and the browser are on the same
+machine, so `localhost` just works.
 
 Options:
 
@@ -45,9 +47,10 @@ python3 ../photobook.py --open
 - Click a photo to zoom it to a full, framed view on black; click again (or
   press Escape) to zoom back out.
 - **Edit mode**: click the book's background, or press space, to toggle it.
-  Each page then shows a black "R" button (top-left/top-right) that
-  auto-relayouts just that page - same photos, new arrangement. Exiting
-  edit mode (background click or space again) saves the current layout to
+  Each page then shows a black button (L on the left page, R on the right)
+  that auto-relayouts just that page - same photos, new arrangement; press
+  L or R on the keyboard instead of clicking if you prefer. Exiting edit
+  mode (background click or space again) saves the current layout to
   `photobook_state.json` in the served folder, so it's what you'll see next
   time you run the app there. Photos added to the folder later show up as
   new pages appended at the end, without disturbing anything you've laid
@@ -55,6 +58,26 @@ python3 ../photobook.py --open
   a static export has nowhere to save to.
 
 More features to come.
+
+## Run on Android (Termux)
+
+No compiled dependencies, so [Termux](https://termux.dev/) is enough - no
+Netlify deploy needed just to try something out:
+
+```bash
+pkg update && pkg install python git
+git clone https://github.com/niko-hn/photobook
+cd photobook
+python photobook.py --folder sample_photos
+```
+
+Open the printed `http://localhost:8000/` in your phone's browser. Skip
+`--open` on Termux - there's no browser launcher for Python's `webbrowser`
+module to shell out to, so just tap the link yourself.
+
+To browse your own photos instead of the sample set: run
+`termux-setup-storage` once (grants Termux access to shared storage), then
+point `--folder` at something like `~/storage/dcim/Camera`.
 
 ## Static export (Netlify, GitHub Pages, etc.)
 
