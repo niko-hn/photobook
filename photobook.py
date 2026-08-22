@@ -245,15 +245,14 @@ HTML_PAGE = """<!doctype html>
     position:relative;
     width:100%;
     height:100%;
-    display:flex;
-    align-items:center;
-    justify-content:center;
   }
   #book{
-    position:relative;
+    position:absolute;
+    top:10px;
+    left:30px;
+    right:30px;
+    bottom:25px;
     display:flex;
-    width:min(94vw, 1200px);
-    height:min(80vh, 780px);
     border-radius:6px;
     box-shadow:0 30px 60px -15px #000000aa, 0 0 0 1px #00000033;
     overflow:hidden;
@@ -508,34 +507,35 @@ HTML_PAGE = """<!doctype html>
   /* ---- Nav ---- */
   .nav-btn{
     position:absolute;
-    top:50%;
-    transform:translateY(-50%);
-    width:46px;
-    height:46px;
-    border-radius:50%;
+    top:10px;
+    bottom:25px;
+    width:30px;
     border:none;
-    background:#ffffff22;
-    color:#f4ecdd;
-    font-size:20px;
+    background:transparent;
+    color:#f4ecdd99;
+    font-size:18px;
     cursor:pointer;
     display:flex;
     align-items:center;
     justify-content:center;
     z-index:10;
-    backdrop-filter:blur(2px);
-    transition:opacity .15s, background .15s;
+    transition:color .15s, background .15s;
   }
-  .nav-btn:hover{ background:#ffffff3a; }
+  .nav-btn:hover{ color:#f4ecdd; background:#ffffff14; }
   .nav-btn:disabled{ opacity:0; pointer-events:none; }
-  #prevBtn{ left:14px; }
-  #nextBtn{ right:14px; }
+  #prevBtn{ left:0; }
+  #nextBtn{ right:0; }
 
   #progress{
     position:absolute;
-    bottom:18px;
-    left:50%;
-    transform:translateX(-50%);
-    font-size:12px;
+    left:30px;
+    right:30px;
+    bottom:0;
+    height:25px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:11px;
     color:#f4ecdd99;
     letter-spacing:.1em;
   }
