@@ -343,6 +343,7 @@ HTML_PAGE = """<!doctype html>
     width:100%;
     height:100%;
     object-fit:cover;
+    object-position:center top;
     background:#ddd3c2;
     cursor:zoom-in;
   }
@@ -379,6 +380,7 @@ HTML_PAGE = """<!doctype html>
     width:100%;
     height:100%;
     object-fit:cover;
+    object-position:center top;
   }
 
   .page-canvas{
