@@ -1,0 +1,543 @@
+#!/usr/bin/env python3
+"""
+photobook.py - a single-file photo album web app.
+
+Run it inside a folder of photos and it starts a local webserver that
+presents the images as a flip-through book: a front cover page followed
+by spreads showing two pages at a time, each page laid out with 1-3
+photos in a varying, framed-photo style.
+
+Usage:
+    python3 photobook.py [--port 8000] [--host 127.0.0.1] [--open]
+
+No third-party dependencies - standard library only.
+"""
+
+import argparse
+import json
+import mimetypes
+import os
+import random
+import socket
+import sys
+import threading
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlparse, unquote
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+
+COVER_LAYOUTS = ["1a", "1b"]
+LAYOUTS_BY_COUNT = {
+    1: ["1a", "1b"],
+    2: ["2a", "2b", "2c"],
+    3: ["3a", "3b", "3c"],
+}
+
+
+def find_photos(folder: Path):
+    photos = []
+    for entry in sorted(folder.iterdir()):
+        if entry.is_file() and entry.suffix.lower() in IMAGE_EXTENSIONS:
+            photos.append(entry)
+    return photos
+
+
+def build_album(folder: Path):
+    photos = find_photos(folder)
+    rng = random.Random()
+
+    cover_choices = photos[:]
+    rng.shuffle(cover_choices)
+    cover = [p.name for p in cover_choices[:5]]
+
+    remaining = photos[:]
+    rng.shuffle(remaining)
+
+    pages = []
+    idx = 0
+    while idx < len(remaining):
+        left = len(remaining) - idx
+        choices = [n for n in (1, 2, 3) if n <= left]
+        size = rng.choice(choices)
+        group = remaining[idx: idx + size]
+        idx += size
+        layout = rng.choice(LAYOUTS_BY_COUNT[size])
+        page_photos = [
+            {"src": p.name, "rot": round(rng.uniform(-4.5, 4.5), 1)}
+            for p in group
+        ]
+        pages.append({"photos": page_photos, "layout": layout})
+
+    return {
+        "folder": folder.name or str(folder),
+        "count": len(photos),
+        "cover": cover,
+        "pages": pages,
+    }
+
+
+HTML_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Photobook</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><text y=%2224%22 font-size=%2226%22>&#128248;</text></svg>">
+<style>
+  :root{
+    --paper:#f4ecdd;
+    --paper-dark:#ece1cc;
+    --ink:#3a2f27;
+    --ink-soft:#7a6a5a;
+    --spine:#00000022;
+    --accent:#b5652f;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    font-family:"Iowan Old Style","Palatino Linotype",Georgia,"Times New Roman",serif;
+    background:radial-gradient(ellipse at center, #2b241d 0%, #17130f 100%);
+    color:var(--ink);
+    overflow:hidden;
+    -webkit-user-select:none;
+    user-select:none;
+    touch-action:pan-y;
+  }
+  #app{
+    position:relative;
+    width:100%;
+    height:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  #book{
+    position:relative;
+    display:flex;
+    width:min(94vw, 1200px);
+    height:min(80vh, 780px);
+    border-radius:6px;
+    box-shadow:0 30px 60px -15px #000000aa, 0 0 0 1px #00000033;
+    overflow:hidden;
+  }
+  .page{
+    position:relative;
+    flex:1 1 50%;
+    background:
+      linear-gradient(90deg, #00000010, transparent 24px),
+      var(--paper);
+    padding:5%;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    overflow:hidden;
+  }
+  .page.page-right{
+    background:
+      linear-gradient(270deg, #00000010, transparent 24px),
+      var(--paper);
+  }
+  .page.blank{
+    background:var(--paper-dark);
+  }
+  #book::after{
+    content:"";
+    position:absolute;
+    left:50%;
+    top:0;
+    bottom:0;
+    width:26px;
+    margin-left:-13px;
+    background:linear-gradient(90deg, transparent, var(--spine) 45%, var(--spine) 55%, transparent);
+    pointer-events:none;
+    z-index:5;
+  }
+
+  /* ---- Cover ---- */
+  .cover-wrap{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:28px;
+    text-align:center;
+  }
+  .cover-title{
+    font-size:clamp(22px,3.6vw,40px);
+    letter-spacing:.03em;
+    color:var(--ink);
+    font-weight:600;
+    text-transform:capitalize;
+  }
+  .cover-sub{
+    margin-top:-16px;
+    font-size:13px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--ink-soft);
+  }
+  .cover-thumbs{
+    position:relative;
+    width:100%;
+    max-width:340px;
+    height:170px;
+  }
+  .cover-thumbs .frame{
+    position:absolute;
+    width:120px;
+    height:120px;
+  }
+  .cover-hint{
+    font-size:12px;
+    color:var(--ink-soft);
+    letter-spacing:.08em;
+  }
+
+  /* ---- Photo frames ---- */
+  .frame{
+    background:#fff;
+    padding:8px 8px 22px 8px;
+    box-shadow:0 10px 22px -8px #00000066, 0 1px 0 #fff inset;
+    border-radius:2px;
+  }
+  .frame img{
+    display:block;
+    width:100%;
+    height:100%;
+    object-fit:cover;
+    background:#ddd3c2;
+  }
+
+  .page-grid{
+    width:100%;
+    height:100%;
+    display:grid;
+    gap:18px;
+  }
+  /* 1 photo layouts */
+  .layout-1a .page-grid, .layout-1b .page-grid{
+    grid-template-columns:1fr;
+    grid-template-rows:1fr;
+    place-items:center;
+  }
+  .layout-1a .frame{ width:78%; height:78%; }
+  .layout-1b .frame{ width:60%; height:92%; }
+
+  /* 2 photo layouts */
+  .layout-2a .page-grid{ grid-template-columns:1fr; grid-template-rows:1fr 1fr; place-items:center; }
+  .layout-2b .page-grid{ grid-template-columns:1fr 1fr; grid-template-rows:1fr; place-items:center; }
+  .layout-2c .page-grid{ grid-template-columns:1fr 1fr; grid-template-rows:1fr; place-items:center; }
+  .layout-2a .frame{ width:70%; height:44%; }
+  .layout-2b .frame{ width:88%; height:70%; }
+  .layout-2c .frame:nth-child(1){ width:70%; height:55%; align-self:start; justify-self:end; }
+  .layout-2c .frame:nth-child(2){ width:70%; height:55%; align-self:end; justify-self:start; }
+
+  /* 3 photo layouts */
+  .layout-3a .page-grid{ grid-template-columns:1.3fr 1fr; grid-template-rows:1fr 1fr; }
+  .layout-3a .frame:nth-child(1){ grid-row:1 / 3; width:92%; height:92%; align-self:center; justify-self:center; }
+  .layout-3a .frame:nth-child(2){ width:88%; height:80%; align-self:center; justify-self:center; }
+  .layout-3a .frame:nth-child(3){ width:88%; height:80%; align-self:center; justify-self:center; }
+  .layout-3b .page-grid{ grid-template-columns:1fr 1fr 1fr; grid-template-rows:1fr; place-items:center; }
+  .layout-3b .frame{ width:90%; height:60%; }
+  .layout-3c .page-grid{ grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; }
+  .layout-3c .frame:nth-child(1){ grid-column:1 / 3; width:60%; height:80%; align-self:center; justify-self:center; }
+  .layout-3c .frame:nth-child(2){ width:82%; height:75%; align-self:center; justify-self:center; }
+  .layout-3c .frame:nth-child(3){ width:82%; height:75%; align-self:center; justify-self:center; }
+
+  .page-label{
+    position:absolute;
+    bottom:14px;
+    font-size:11px;
+    color:var(--ink-soft);
+    letter-spacing:.08em;
+  }
+
+  /* ---- Nav ---- */
+  .nav-btn{
+    position:absolute;
+    top:50%;
+    transform:translateY(-50%);
+    width:46px;
+    height:46px;
+    border-radius:50%;
+    border:none;
+    background:#ffffff22;
+    color:#f4ecdd;
+    font-size:20px;
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    z-index:10;
+    backdrop-filter:blur(2px);
+    transition:opacity .15s, background .15s;
+  }
+  .nav-btn:hover{ background:#ffffff3a; }
+  .nav-btn:disabled{ opacity:0; pointer-events:none; }
+  #prevBtn{ left:14px; }
+  #nextBtn{ right:14px; }
+
+  #progress{
+    position:absolute;
+    bottom:18px;
+    left:50%;
+    transform:translateX(-50%);
+    font-size:12px;
+    color:#f4ecdd99;
+    letter-spacing:.1em;
+  }
+
+  #empty{
+    color:#f4ecdd;
+    text-align:center;
+    font-size:16px;
+    line-height:1.6;
+  }
+
+  .fade-enter{ animation:pageIn .32s ease; }
+  @keyframes pageIn{
+    from{ opacity:0; transform:scale(.985); }
+    to{ opacity:1; transform:scale(1); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <button id="prevBtn" class="nav-btn" aria-label="Previous">&#8249;</button>
+  <div id="book"></div>
+  <button id="nextBtn" class="nav-btn" aria-label="Next">&#8250;</button>
+  <div id="progress"></div>
+</div>
+
+<script>
+let DATA = null;
+let spread = 0; // 0 = cover, 1..N = page pairs
+let totalSpreads = 1;
+
+const bookEl = document.getElementById('book');
+const prevBtn = document.getElementById('prevBtn');
+const nextBtn = document.getElementById('nextBtn');
+const progressEl = document.getElementById('progress');
+
+function frameHtml(photo){
+  const rot = photo.rot || 0;
+  return `<div class="frame" style="transform:rotate(${rot}deg)">
+            <img src="/photo/${encodeURIComponent(photo.src)}" alt="">
+          </div>`;
+}
+
+function renderCover(){
+  const thumbs = DATA.cover.map((src, i) => {
+    const positions = [
+      {top:'10px', left:'10px', rot:-8},
+      {top:'0px', left:'110px', rot:5},
+      {top:'50px', left:'55px', rot:-2},
+      {top:'20px', left:'200px', rot:9},
+      {top:'70px', left:'160px', rot:-6},
+    ];
+    const p = positions[i % positions.length];
+    return `<div class="frame" style="position:absolute; top:${p.top}; left:${p.left}; width:110px; height:110px; transform:rotate(${p.rot}deg); z-index:${i}">
+              <img src="/photo/${encodeURIComponent(src)}" alt="">
+            </div>`;
+  }).join('');
+
+  return `
+    <div class="page blank"></div>
+    <div class="page page-right">
+      <div class="cover-wrap">
+        <div class="cover-sub">Photobook</div>
+        <div class="cover-title">${escapeHtml(DATA.folder)}</div>
+        <div class="cover-thumbs">${thumbs}</div>
+        <div class="cover-hint">${DATA.count} photo${DATA.count === 1 ? '' : 's'} &middot; swipe or press &#8594; to open</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPage(page, side){
+  if (!page){
+    return `<div class="page ${side} blank"></div>`;
+  }
+  const frames = page.photos.map(frameHtml).join('');
+  return `<div class="page ${side} layout-${page.layout}">
+            <div class="page-grid">${frames}</div>
+          </div>`;
+}
+
+function renderSpread(){
+  bookEl.classList.remove('fade-enter');
+  void bookEl.offsetWidth;
+  bookEl.classList.add('fade-enter');
+
+  if (spread === 0){
+    bookEl.innerHTML = renderCover();
+  } else {
+    const pageIdx = (spread - 1) * 2;
+    const left = DATA.pages[pageIdx];
+    const right = DATA.pages[pageIdx + 1];
+    bookEl.innerHTML = renderPage(left, 'page-left') + renderPage(right, 'page-right');
+  }
+
+  prevBtn.disabled = spread === 0;
+  nextBtn.disabled = spread === totalSpreads - 1;
+  progressEl.textContent = spread === 0 ? '' : `${spread} / ${totalSpreads - 1}`;
+}
+
+function go(delta){
+  const next = spread + delta;
+  if (next < 0 || next > totalSpreads - 1) return;
+  spread = next;
+  renderSpread();
+}
+
+function escapeHtml(s){
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+prevBtn.addEventListener('click', () => go(-1));
+nextBtn.addEventListener('click', () => go(1));
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight') go(1);
+  if (e.key === 'ArrowLeft') go(-1);
+});
+
+let touchStartX = null, touchStartY = null;
+document.addEventListener('touchstart', (e) => {
+  touchStartX = e.changedTouches[0].clientX;
+  touchStartY = e.changedTouches[0].clientY;
+}, {passive:true});
+
+document.addEventListener('touchend', (e) => {
+  if (touchStartX === null) return;
+  const dx = e.changedTouches[0].clientX - touchStartX;
+  const dy = e.changedTouches[0].clientY - touchStartY;
+  touchStartX = null;
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5){
+    go(dx < 0 ? 1 : -1);
+  }
+}, {passive:true});
+
+fetch('/api/data').then(r => r.json()).then(data => {
+  DATA = data;
+  if (!DATA.count){
+    bookEl.style.display = 'flex';
+    bookEl.style.alignItems = 'center';
+    bookEl.style.justifyContent = 'center';
+    bookEl.innerHTML = '<div id="empty">No photos found in this folder.<br>Add some .jpg / .png files and refresh.</div>';
+    prevBtn.style.display = 'none';
+    nextBtn.style.display = 'none';
+    return;
+  }
+  totalSpreads = 1 + Math.ceil(DATA.pages.length / 2);
+  renderSpread();
+});
+</script>
+</body>
+</html>
+"""
+
+
+class AlbumHandler(BaseHTTPRequestHandler):
+    album = None
+    photo_index = {}
+    folder = None
+
+    def log_message(self, fmt, *args):
+        pass  # keep the console quiet
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        path = unquote(parsed.path)
+
+        if path == "/":
+            self._send_bytes(HTML_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+        elif path == "/api/data":
+            body = json.dumps(self.album).encode("utf-8")
+            self._send_bytes(body, "application/json")
+        elif path.startswith("/photo/"):
+            name = path[len("/photo/"):]
+            self._serve_photo(name)
+        else:
+            self.send_error(404, "Not found")
+
+    def _serve_photo(self, name):
+        full_path = self.photo_index.get(name)
+        if full_path is None or not full_path.is_file():
+            self.send_error(404, "Photo not found")
+            return
+        content_type = mimetypes.guess_type(full_path.name)[0] or "application/octet-stream"
+        data = full_path.read_bytes()
+        self._send_bytes(data, content_type, cache=True)
+
+    def _send_bytes(self, data, content_type, cache=False):
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        if cache:
+            self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
+
+
+def pick_port(host, start_port):
+    port = start_port
+    for _ in range(20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind((host, port))
+                return port
+            except OSError:
+                port += 1
+    return start_port
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Serve a photo album for the current folder.")
+    parser.add_argument("--port", type=int, default=8000, help="port to listen on (default 8000)")
+    parser.add_argument("--host", default="0.0.0.0", help="host to bind (default 0.0.0.0)")
+    parser.add_argument("--open", action="store_true", help="open the album in your default browser")
+    parser.add_argument("--folder", default=".", help="folder of photos to serve (default: current folder)")
+    args = parser.parse_args()
+
+    folder = Path(args.folder).resolve()
+    if not folder.is_dir():
+        print(f"Not a folder: {folder}", file=sys.stderr)
+        sys.exit(1)
+
+    album = build_album(folder)
+    photo_index = {p["src"]: folder / p["src"] for p in [{"src": s} for s in album["cover"]]}
+    for page in album["pages"]:
+        for photo in page["photos"]:
+            photo_index[photo["src"]] = folder / photo["src"]
+
+    AlbumHandler.album = album
+    AlbumHandler.photo_index = photo_index
+    AlbumHandler.folder = folder
+
+    port = pick_port(args.host, args.port)
+    server = ThreadingHTTPServer((args.host, port), AlbumHandler)
+
+    display_host = "localhost" if args.host in ("0.0.0.0", "::") else args.host
+    url = f"http://{display_host}:{port}/"
+    print(f"Photobook for '{folder.name}' ({album['count']} photos)")
+    print(f"Serving at {url}  (Ctrl+C to stop)")
+
+    if args.open:
+        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopping.")
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()
