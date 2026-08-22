@@ -228,17 +228,24 @@ HTML_PAGE = """<!doctype html>
     opacity:1;
     pointer-events:auto;
   }
-  #lightboxImg{
+  #lightboxFrame{
     position:fixed;
-    object-fit:cover;
-    box-shadow:0 20px 60px -10px #000000cc;
+    background:#fff;
+    box-shadow:0 30px 80px -12px #000000cc;
     cursor:zoom-out;
     transition:
       top .38s cubic-bezier(.3,.7,.3,1),
       left .38s cubic-bezier(.3,.7,.3,1),
       width .38s cubic-bezier(.3,.7,.3,1),
       height .38s cubic-bezier(.3,.7,.3,1),
+      padding .38s cubic-bezier(.3,.7,.3,1),
       transform .38s cubic-bezier(.3,.7,.3,1);
+  }
+  #lightboxFrame img{
+    display:block;
+    width:100%;
+    height:100%;
+    object-fit:cover;
   }
 
   .page-grid{
@@ -549,54 +556,77 @@ function go(delta){
 
 const lightbox = document.createElement('div');
 lightbox.id = 'lightbox';
+const lightboxFrame = document.createElement('div');
+lightboxFrame.id = 'lightboxFrame';
 const lightboxImg = document.createElement('img');
 lightboxImg.id = 'lightboxImg';
 lightboxImg.alt = '';
-lightbox.appendChild(lightboxImg);
+lightboxFrame.appendChild(lightboxImg);
+lightbox.appendChild(lightboxFrame);
 document.body.appendChild(lightbox);
 
 let lightboxOpen = false;
 let lightboxSourceImg = null;
 let lightboxSourceRot = 0;
+let lightboxSourcePadding = '';
 
-function fitRect(naturalW, naturalH){
-  const maxW = window.innerWidth * 0.92;
-  const maxH = window.innerHeight * 0.92;
-  const ratio = Math.min(maxW / naturalW, maxH / naturalH);
-  const w = naturalW * ratio, h = naturalH * ratio;
-  return {top: (window.innerHeight - h) / 2, left: (window.innerWidth - w) / 2, width: w, height: h};
+// Same polaroid proportions as .frame (8px 8px 22px 8px), scaled up for
+// a full-screen view instead of staying pinned at that fixed pixel size.
+function fitFrameRect(naturalW, naturalH){
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const padX = Math.min(34, Math.max(14, vw * 0.02));
+  const padTop = padX;
+  const padBottom = padX * 2.6;
+
+  const availW = vw * 0.92 - padX * 2;
+  const availH = vh * 0.92 - padTop - padBottom;
+  const ratio = Math.min(availW / naturalW, availH / naturalH);
+  const imgW = naturalW * ratio, imgH = naturalH * ratio;
+  const frameW = imgW + padX * 2, frameH = imgH + padTop + padBottom;
+
+  return {
+    top: (vh - frameH) / 2,
+    left: (vw - frameW) / 2,
+    width: frameW,
+    height: frameH,
+    padding: `${padTop}px ${padX}px ${padBottom}px ${padX}px`,
+  };
 }
 
 function openLightbox(imgEl){
   if (animating || lightboxOpen) return;
   lightboxOpen = true;
   lightboxSourceImg = imgEl;
-  lightboxSourceRot = parseFloat(imgEl.closest('.frame')?.dataset.rot || '0');
+  const frameEl = imgEl.closest('.frame');
+  lightboxSourceRot = parseFloat(frameEl?.dataset.rot || '0');
+  lightboxSourcePadding = frameEl ? getComputedStyle(frameEl).padding : '8px 8px 22px 8px';
 
-  const r = imgEl.getBoundingClientRect();
+  const r = (frameEl || imgEl).getBoundingClientRect();
   lightboxImg.src = imgEl.src;
 
-  lightboxImg.style.transition = 'none';
-  lightboxImg.style.top = r.top + 'px';
-  lightboxImg.style.left = r.left + 'px';
-  lightboxImg.style.width = r.width + 'px';
-  lightboxImg.style.height = r.height + 'px';
-  lightboxImg.style.transform = `rotate(${lightboxSourceRot}deg)`;
+  lightboxFrame.style.transition = 'none';
+  lightboxFrame.style.top = r.top + 'px';
+  lightboxFrame.style.left = r.left + 'px';
+  lightboxFrame.style.width = r.width + 'px';
+  lightboxFrame.style.height = r.height + 'px';
+  lightboxFrame.style.padding = lightboxSourcePadding;
+  lightboxFrame.style.transform = `rotate(${lightboxSourceRot}deg)`;
 
   lightbox.classList.add('open');
   prevBtn.style.visibility = 'hidden';
   nextBtn.style.visibility = 'hidden';
 
-  void lightboxImg.offsetWidth; // force reflow so the next change transitions
+  void lightboxFrame.offsetWidth; // force reflow so the next change transitions
 
   const onLoad = () => {
-    const target = fitRect(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
-    lightboxImg.style.transition = '';
-    lightboxImg.style.top = target.top + 'px';
-    lightboxImg.style.left = target.left + 'px';
-    lightboxImg.style.width = target.width + 'px';
-    lightboxImg.style.height = target.height + 'px';
-    lightboxImg.style.transform = 'rotate(0deg)';
+    const target = fitFrameRect(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
+    lightboxFrame.style.transition = '';
+    lightboxFrame.style.top = target.top + 'px';
+    lightboxFrame.style.left = target.left + 'px';
+    lightboxFrame.style.width = target.width + 'px';
+    lightboxFrame.style.height = target.height + 'px';
+    lightboxFrame.style.padding = target.padding;
+    lightboxFrame.style.transform = 'rotate(0deg)';
   };
   if (lightboxImg.complete) onLoad();
   else lightboxImg.onload = onLoad;
@@ -606,17 +636,19 @@ function closeLightbox(){
   if (!lightboxOpen) return;
   lightboxOpen = false;
 
-  const r = lightboxSourceImg ? lightboxSourceImg.getBoundingClientRect() : null;
+  const frameEl = lightboxSourceImg ? lightboxSourceImg.closest('.frame') : null;
+  const r = (frameEl || lightboxSourceImg) ? (frameEl || lightboxSourceImg).getBoundingClientRect() : null;
   lightbox.classList.remove('open');
   prevBtn.style.visibility = '';
   nextBtn.style.visibility = '';
 
   if (r){
-    lightboxImg.style.top = r.top + 'px';
-    lightboxImg.style.left = r.left + 'px';
-    lightboxImg.style.width = r.width + 'px';
-    lightboxImg.style.height = r.height + 'px';
-    lightboxImg.style.transform = `rotate(${lightboxSourceRot}deg)`;
+    lightboxFrame.style.top = r.top + 'px';
+    lightboxFrame.style.left = r.left + 'px';
+    lightboxFrame.style.width = r.width + 'px';
+    lightboxFrame.style.height = r.height + 'px';
+    lightboxFrame.style.padding = lightboxSourcePadding;
+    lightboxFrame.style.transform = `rotate(${lightboxSourceRot}deg)`;
   }
 }
 
