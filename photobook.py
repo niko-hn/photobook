@@ -665,27 +665,29 @@ function albumPageInner(page, startNum, pageIdx){
   return `<div class="page-canvas">${frames}</div>`;
 }
 
-// The 1-based number of the first photo on a page, counting through all
-// pages before it in order - purely derived, never stored.
-function pageStartNumber(pageIdx){
-  let n = 1;
-  for (let i = 0; i < pageIdx; i++) n += DATA.pages[i].photos.length;
-  return n;
-}
-
 // Returns the content ('cls' + 'inner' html + 'pageIdx') that belongs in a
 // given left/right slot of a given spread, independent of what's currently
 // rendered - used both for the static book and for flip-animation faces.
 // pageIdx is null for the cover and blank slots (nothing to relayout there).
+// Photo numbering is local to the spread: the left page starts at 1, and
+// the right page continues on from wherever the left page left off - so
+// every visible badge is a small, unambiguous number a keypress can target.
 function slotAt(spreadIdx, side){
   if (spreadIdx === 0){
     if (side === 'left') return {cls: 'blank', inner: '', pageIdx: null};
     return {cls: '', inner: coverInner(), pageIdx: null};
   }
-  const pageIdx = (spreadIdx - 1) * 2 + (side === 'left' ? 0 : 1);
+  const leftPageIdx = (spreadIdx - 1) * 2;
+  const pageIdx = side === 'left' ? leftPageIdx : leftPageIdx + 1;
   const page = DATA.pages[pageIdx];
   if (!page) return {cls: 'blank', inner: '', pageIdx: null};
-  return {cls: '', inner: albumPageInner(page, pageStartNumber(pageIdx), pageIdx), pageIdx};
+
+  let startNum = 1;
+  if (side === 'right'){
+    const leftPage = DATA.pages[leftPageIdx];
+    startNum = 1 + (leftPage ? leftPage.photos.length : 0);
+  }
+  return {cls: '', inner: albumPageInner(page, startNum, pageIdx), pageIdx};
 }
 
 function pageHtml(slot, side){
@@ -982,6 +984,28 @@ function relayoutPage(pageIdx){
   bookEl.innerHTML = fullSpreadHTML(spread);
 }
 
+// Finds which (pageIdx, photoIdx) currently shows a given badge number on
+// the spread that's on screen right now - same numbering slotAt() renders,
+// so a keypress lands on exactly the photo whose badge it matches.
+function findBadgeTarget(num){
+  if (spread === 0 || num < 1) return null;
+  const leftPageIdx = (spread - 1) * 2;
+  const rightPageIdx = leftPageIdx + 1;
+  const leftPage = DATA.pages[leftPageIdx];
+  const rightPage = DATA.pages[rightPageIdx];
+
+  if (leftPage && num <= leftPage.photos.length){
+    return {pageIdx: leftPageIdx, photoIdx: num - 1};
+  }
+  if (rightPage){
+    const rightStart = 1 + (leftPage ? leftPage.photos.length : 0);
+    if (num >= rightStart && num < rightStart + rightPage.photos.length){
+      return {pageIdx: rightPageIdx, photoIdx: num - rightStart};
+    }
+  }
+  return null;
+}
+
 function handleMoveButtonClick(pageIdx, photoIdx){
   const photo = DATA.pages[pageIdx].photos[photoIdx];
   if (!photo) return;
@@ -1091,6 +1115,11 @@ document.addEventListener('keydown', (e) => {
   if (editMode && !animating && (e.key === 'r' || e.key === 'R')){
     const pageIdx = slotAt(spread, 'right').pageIdx;
     if (pageIdx !== null) relayoutPage(pageIdx);
+    return;
+  }
+  if (editMode && !animating && /^[1-9]$/.test(e.key)){
+    const target = findBadgeTarget(parseInt(e.key, 10));
+    if (target) handleMoveButtonClick(target.pageIdx, target.photoIdx);
     return;
   }
   if (e.key === 'ArrowRight') go(1);

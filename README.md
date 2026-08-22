@@ -57,15 +57,18 @@ python3 ../photobook.py --open
   out. This only works against the live server (`python3 photobook.py`) -
   a static export has nowhere to save to.
 - **Reordering photos** (also edit mode): every photo shows a small numbered
-  badge (its position in the album, top-left corner). Click one to pick it
-  up, page around to find where it should go, then click another photo's
-  badge to insert the picked-up one right before it - both the source and
+  badge in its top-left corner, numbered 1, 2, 3... restarting at 1 for each
+  spread (left page first, then the right page continuing on) - so the
+  numbers on screen are always small and unambiguous. Click one (or press
+  its number on the keyboard) to pick it up, page around to find where it
+  should go, then click another photo's badge (or press its number) to
+  insert the picked-up one right before it - both the source and
   destination pages re-layout to fit their new photo count (a page can end
   up with zero photos, or more than three; extra-large pages fall back to a
   plain grid). Click a page's blank background instead of a badge to drop
   the picked-up photo at the end of that page - also the only way to target
-  a page that's currently empty. Click the picked photo's own badge again,
-  or press Escape, to cancel without moving anything.
+  a page that's currently empty. Click the picked photo's own badge/number
+  again, or press Escape, to cancel without moving anything.
 
 More features to come.
 
