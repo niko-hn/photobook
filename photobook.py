@@ -211,6 +211,34 @@ HTML_PAGE = """<!doctype html>
     height:100%;
     object-fit:cover;
     background:#ddd3c2;
+    cursor:zoom-in;
+  }
+
+  /* ---- Lightbox ---- */
+  #lightbox{
+    position:fixed;
+    inset:0;
+    background:#000;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .3s ease;
+    z-index:100;
+  }
+  #lightbox.open{
+    opacity:1;
+    pointer-events:auto;
+  }
+  #lightboxImg{
+    position:fixed;
+    object-fit:cover;
+    box-shadow:0 20px 60px -10px #000000cc;
+    cursor:zoom-out;
+    transition:
+      top .38s cubic-bezier(.3,.7,.3,1),
+      left .38s cubic-bezier(.3,.7,.3,1),
+      width .38s cubic-bezier(.3,.7,.3,1),
+      height .38s cubic-bezier(.3,.7,.3,1),
+      transform .38s cubic-bezier(.3,.7,.3,1);
   }
 
   .page-grid{
@@ -369,7 +397,7 @@ const PHOTO_PREFIX = '__PHOTO_PREFIX__';
 
 function frameHtml(photo){
   const rot = photo.rot || 0;
-  return `<div class="frame" style="transform:rotate(${rot}deg)">
+  return `<div class="frame" data-rot="${rot}" style="transform:rotate(${rot}deg)">
             <img src="${PHOTO_PREFIX}${encodeURIComponent(photo.src)}" alt="">
           </div>`;
 }
@@ -384,7 +412,7 @@ function coverInner(){
       {top:'70px', left:'160px', rot:-6},
     ];
     const p = positions[i % positions.length];
-    return `<div class="frame" style="position:absolute; top:${p.top}; left:${p.left}; width:110px; height:110px; transform:rotate(${p.rot}deg); z-index:${i}">
+    return `<div class="frame" data-rot="${p.rot}" style="position:absolute; top:${p.top}; left:${p.left}; width:110px; height:110px; transform:rotate(${p.rot}deg); z-index:${i}">
               <img src="${PHOTO_PREFIX}${encodeURIComponent(src)}" alt="">
             </div>`;
   }).join('');
@@ -509,12 +537,95 @@ function flipBackward(nextSpread){
 }
 
 function go(delta){
-  if (animating || delta === 0) return;
+  if (animating || lightboxOpen || delta === 0) return;
   const next = spread + delta;
   if (next < 0 || next > totalSpreads - 1) return;
   if (delta > 0) flipForward(next);
   else flipBackward(next);
 }
+
+// ---- Lightbox: shared-element zoom from a clicked frame to a full,
+// black-backed view, and back again on a second click. ----
+
+const lightbox = document.createElement('div');
+lightbox.id = 'lightbox';
+const lightboxImg = document.createElement('img');
+lightboxImg.id = 'lightboxImg';
+lightboxImg.alt = '';
+lightbox.appendChild(lightboxImg);
+document.body.appendChild(lightbox);
+
+let lightboxOpen = false;
+let lightboxSourceImg = null;
+let lightboxSourceRot = 0;
+
+function fitRect(naturalW, naturalH){
+  const maxW = window.innerWidth * 0.92;
+  const maxH = window.innerHeight * 0.92;
+  const ratio = Math.min(maxW / naturalW, maxH / naturalH);
+  const w = naturalW * ratio, h = naturalH * ratio;
+  return {top: (window.innerHeight - h) / 2, left: (window.innerWidth - w) / 2, width: w, height: h};
+}
+
+function openLightbox(imgEl){
+  if (animating || lightboxOpen) return;
+  lightboxOpen = true;
+  lightboxSourceImg = imgEl;
+  lightboxSourceRot = parseFloat(imgEl.closest('.frame')?.dataset.rot || '0');
+
+  const r = imgEl.getBoundingClientRect();
+  lightboxImg.src = imgEl.src;
+
+  lightboxImg.style.transition = 'none';
+  lightboxImg.style.top = r.top + 'px';
+  lightboxImg.style.left = r.left + 'px';
+  lightboxImg.style.width = r.width + 'px';
+  lightboxImg.style.height = r.height + 'px';
+  lightboxImg.style.transform = `rotate(${lightboxSourceRot}deg)`;
+
+  lightbox.classList.add('open');
+  prevBtn.style.visibility = 'hidden';
+  nextBtn.style.visibility = 'hidden';
+
+  void lightboxImg.offsetWidth; // force reflow so the next change transitions
+
+  const onLoad = () => {
+    const target = fitRect(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
+    lightboxImg.style.transition = '';
+    lightboxImg.style.top = target.top + 'px';
+    lightboxImg.style.left = target.left + 'px';
+    lightboxImg.style.width = target.width + 'px';
+    lightboxImg.style.height = target.height + 'px';
+    lightboxImg.style.transform = 'rotate(0deg)';
+  };
+  if (lightboxImg.complete) onLoad();
+  else lightboxImg.onload = onLoad;
+}
+
+function closeLightbox(){
+  if (!lightboxOpen) return;
+  lightboxOpen = false;
+
+  const r = lightboxSourceImg ? lightboxSourceImg.getBoundingClientRect() : null;
+  lightbox.classList.remove('open');
+  prevBtn.style.visibility = '';
+  nextBtn.style.visibility = '';
+
+  if (r){
+    lightboxImg.style.top = r.top + 'px';
+    lightboxImg.style.left = r.left + 'px';
+    lightboxImg.style.width = r.width + 'px';
+    lightboxImg.style.height = r.height + 'px';
+    lightboxImg.style.transform = `rotate(${lightboxSourceRot}deg)`;
+  }
+}
+
+bookEl.addEventListener('click', (e) => {
+  const img = e.target.closest('.frame img');
+  if (img) openLightbox(img);
+});
+
+lightbox.addEventListener('click', () => closeLightbox());
 
 function escapeHtml(s){
   const d = document.createElement('div');
@@ -526,6 +637,7 @@ prevBtn.addEventListener('click', () => go(-1));
 nextBtn.addEventListener('click', () => go(1));
 
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape'){ closeLightbox(); return; }
   if (e.key === 'ArrowRight') go(1);
   if (e.key === 'ArrowLeft') go(-1);
 });
