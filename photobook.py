@@ -18,6 +18,7 @@ import json
 import mimetypes
 import os
 import random
+import shutil
 import socket
 import sys
 import threading
@@ -364,10 +365,12 @@ const prevBtn = document.getElementById('prevBtn');
 const nextBtn = document.getElementById('nextBtn');
 const progressEl = document.getElementById('progress');
 
+const PHOTO_PREFIX = '__PHOTO_PREFIX__';
+
 function frameHtml(photo){
   const rot = photo.rot || 0;
   return `<div class="frame" style="transform:rotate(${rot}deg)">
-            <img src="/photo/${encodeURIComponent(photo.src)}" alt="">
+            <img src="${PHOTO_PREFIX}${encodeURIComponent(photo.src)}" alt="">
           </div>`;
 }
 
@@ -382,7 +385,7 @@ function coverInner(){
     ];
     const p = positions[i % positions.length];
     return `<div class="frame" style="position:absolute; top:${p.top}; left:${p.left}; width:110px; height:110px; transform:rotate(${p.rot}deg); z-index:${i}">
-              <img src="/photo/${encodeURIComponent(src)}" alt="">
+              <img src="${PHOTO_PREFIX}${encodeURIComponent(src)}" alt="">
             </div>`;
   }).join('');
 
@@ -537,7 +540,7 @@ document.addEventListener('touchend', (e) => {
   }
 }, {passive:true});
 
-fetch('/api/data').then(r => r.json()).then(data => {
+fetch('__API_URL__').then(r => r.json()).then(data => {
   DATA = data;
   if (!DATA.count){
     bookEl.style.display = 'flex';
@@ -570,7 +573,8 @@ class AlbumHandler(BaseHTTPRequestHandler):
         path = unquote(parsed.path)
 
         if path == "/":
-            self._send_bytes(HTML_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            html = HTML_PAGE.replace("__API_URL__", "/api/data").replace("__PHOTO_PREFIX__", "/photo/")
+            self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/api/data":
             body = json.dumps(self.album).encode("utf-8")
             self._send_bytes(body, "application/json")
@@ -599,6 +603,32 @@ class AlbumHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
+def export_static(folder: Path, out_dir: Path):
+    """Bake a folder's album into a self-contained static site: index.html,
+    data.json and a photos/ directory. No server required - works on any
+    static host (Netlify, GitHub Pages, S3, a plain file:// open, etc.)."""
+    album = build_album(folder)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    photos_dir = out_dir / "photos"
+    photos_dir.mkdir(exist_ok=True)
+
+    referenced = set(album["cover"])
+    for page in album["pages"]:
+        for photo in page["photos"]:
+            referenced.add(photo["src"])
+
+    for name in referenced:
+        shutil.copy2(folder / name, photos_dir / name)
+
+    (out_dir / "data.json").write_text(json.dumps(album), encoding="utf-8")
+
+    html = HTML_PAGE.replace("__API_URL__", "./data.json").replace("__PHOTO_PREFIX__", "./photos/")
+    (out_dir / "index.html").write_text(html, encoding="utf-8")
+
+    return album
+
+
 def pick_port(host, start_port):
     port = start_port
     for _ in range(20):
@@ -618,12 +648,24 @@ def main():
     parser.add_argument("--host", default="0.0.0.0", help="host to bind (default 0.0.0.0)")
     parser.add_argument("--open", action="store_true", help="open the album in your default browser")
     parser.add_argument("--folder", default=".", help="folder of photos to serve (default: current folder)")
+    parser.add_argument(
+        "--export",
+        metavar="DIR",
+        help="write a self-contained static site (index.html + data.json + photos/) to DIR and exit, instead of serving",
+    )
     args = parser.parse_args()
 
     folder = Path(args.folder).resolve()
     if not folder.is_dir():
         print(f"Not a folder: {folder}", file=sys.stderr)
         sys.exit(1)
+
+    if args.export:
+        out_dir = Path(args.export).resolve()
+        album = export_static(folder, out_dir)
+        print(f"Exported '{folder.name}' ({album['count']} photos) to {out_dir}")
+        print(f"Open {out_dir / 'index.html'} in a browser, or deploy the folder to any static host.")
+        return
 
     album = build_album(folder)
     photo_index = {p["src"]: folder / p["src"] for p in [{"src": s} for s in album["cover"]]}

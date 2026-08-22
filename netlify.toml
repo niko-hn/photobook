@@ -1,0 +1,3 @@
+[build]
+  command = "python3 photobook.py --folder sample_photos --export dist"
+  publish = "dist"

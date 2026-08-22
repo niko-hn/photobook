@@ -44,3 +44,35 @@ python3 ../photobook.py --open
   real photos.
 
 More features to come.
+
+## Static export (Netlify, GitHub Pages, etc.)
+
+`photobook.py` is a live server meant to run against whatever folder you
+point it at, so it can't be hosted as-is on a static host like Netlify.
+Instead, bake a specific folder's album into a self-contained static site:
+
+```bash
+python3 photobook.py --folder sample_photos --export dist
+```
+
+This writes `dist/index.html`, `dist/data.json` and `dist/photos/` - open
+`dist/index.html` directly, or deploy the `dist` folder anywhere that
+serves static files. It's the same app, minus the ability to browse a
+different folder without re-exporting.
+
+### Netlify
+
+This repo includes a `netlify.toml` that runs the export above at build
+time and publishes the result:
+
+```toml
+[build]
+  command = "python3 photobook.py --folder sample_photos --export dist"
+  publish = "dist"
+```
+
+In the Netlify dashboard: **Add new site → Import an existing project**,
+point it at this repo, and it will build and deploy automatically (change
+`--folder sample_photos` in `netlify.toml` to publish a different folder
+of photos instead).
+
