@@ -122,6 +122,7 @@ HTML_PAGE = """<!doctype html>
     border-radius:6px;
     box-shadow:0 30px 60px -15px #000000aa, 0 0 0 1px #00000033;
     overflow:hidden;
+    perspective:2400px;
   }
   .page{
     position:relative;
@@ -255,6 +256,44 @@ HTML_PAGE = """<!doctype html>
     letter-spacing:.08em;
   }
 
+  /* ---- Page flip ---- */
+  .flip-overlay{
+    position:absolute;
+    top:0;
+    bottom:0;
+    width:50%;
+    transform-style:preserve-3d;
+    pointer-events:none;
+    z-index:20;
+  }
+  .flip-overlay.right{ left:50%; transform-origin:left center; }
+  .flip-overlay.left{ left:0; transform-origin:right center; }
+  .flip-face{
+    position:absolute;
+    inset:0;
+    background:var(--paper);
+    padding:5%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    overflow:hidden;
+    backface-visibility:hidden;
+    box-shadow:0 0 40px -4px #00000066;
+  }
+  .flip-face.blank{ background:var(--paper-dark); }
+  .flip-overlay.dir-fwd .flip-face.back{ transform:rotateY(180deg); }
+  .flip-overlay.dir-back .flip-face.back{ transform:rotateY(-180deg); }
+  .flip-shade{
+    position:absolute;
+    inset:0;
+    background:linear-gradient(90deg, #00000000, #00000060);
+    opacity:0;
+    pointer-events:none;
+  }
+  .flip-overlay.left .flip-shade{
+    background:linear-gradient(270deg, #00000000, #00000060);
+  }
+
   /* ---- Nav ---- */
   .nav-btn{
     position:absolute;
@@ -316,6 +355,9 @@ HTML_PAGE = """<!doctype html>
 let DATA = null;
 let spread = 0; // 0 = cover, 1..N = page pairs
 let totalSpreads = 1;
+let animating = false;
+
+const FLIP_MS = 620;
 
 const bookEl = document.getElementById('book');
 const prevBtn = document.getElementById('prevBtn');
@@ -329,7 +371,7 @@ function frameHtml(photo){
           </div>`;
 }
 
-function renderCover(){
+function coverInner(){
   const thumbs = DATA.cover.map((src, i) => {
     const positions = [
       {top:'10px', left:'10px', rot:-8},
@@ -345,52 +387,124 @@ function renderCover(){
   }).join('');
 
   return `
-    <div class="page blank"></div>
-    <div class="page page-right">
-      <div class="cover-wrap">
-        <div class="cover-sub">Photobook</div>
-        <div class="cover-title">${escapeHtml(DATA.folder)}</div>
-        <div class="cover-thumbs">${thumbs}</div>
-        <div class="cover-hint">${DATA.count} photo${DATA.count === 1 ? '' : 's'} &middot; swipe or press &#8594; to open</div>
-      </div>
+    <div class="cover-wrap">
+      <div class="cover-sub">Photobook</div>
+      <div class="cover-title">${escapeHtml(DATA.folder)}</div>
+      <div class="cover-thumbs">${thumbs}</div>
+      <div class="cover-hint">${DATA.count} photo${DATA.count === 1 ? '' : 's'} &middot; swipe or press &#8594; to open</div>
     </div>
   `;
 }
 
-function renderPage(page, side){
-  if (!page){
-    return `<div class="page ${side} blank"></div>`;
-  }
+function albumPageInner(page){
   const frames = page.photos.map(frameHtml).join('');
-  return `<div class="page ${side} layout-${page.layout}">
-            <div class="page-grid">${frames}</div>
-          </div>`;
+  return `<div class="page-grid">${frames}</div>`;
 }
 
-function renderSpread(){
-  bookEl.classList.remove('fade-enter');
-  void bookEl.offsetWidth;
-  bookEl.classList.add('fade-enter');
-
-  if (spread === 0){
-    bookEl.innerHTML = renderCover();
-  } else {
-    const pageIdx = (spread - 1) * 2;
-    const left = DATA.pages[pageIdx];
-    const right = DATA.pages[pageIdx + 1];
-    bookEl.innerHTML = renderPage(left, 'page-left') + renderPage(right, 'page-right');
+// Returns the content ('cls' + 'inner' html) that belongs in a given
+// left/right slot of a given spread, independent of what's currently
+// rendered - used both for the static book and for flip-animation faces.
+function slotAt(spreadIdx, side){
+  if (spreadIdx === 0){
+    if (side === 'left') return {cls: 'blank', inner: ''};
+    return {cls: '', inner: coverInner()};
   }
+  const pageIdx = (spreadIdx - 1) * 2 + (side === 'left' ? 0 : 1);
+  const page = DATA.pages[pageIdx];
+  if (!page) return {cls: 'blank', inner: ''};
+  return {cls: 'layout-' + page.layout, inner: albumPageInner(page)};
+}
 
-  prevBtn.disabled = spread === 0;
-  nextBtn.disabled = spread === totalSpreads - 1;
+function fullSpreadHTML(spreadIdx){
+  const l = slotAt(spreadIdx, 'left');
+  const r = slotAt(spreadIdx, 'right');
+  return `<div class="page page-left ${l.cls}">${l.inner}</div>` +
+         `<div class="page page-right ${r.cls}">${r.inner}</div>`;
+}
+
+function renderSpreadInstant(){
+  bookEl.innerHTML = fullSpreadHTML(spread);
+  updateChrome();
+}
+
+function updateChrome(){
+  prevBtn.disabled = animating || spread === 0;
+  nextBtn.disabled = animating || spread === totalSpreads - 1;
   progressEl.textContent = spread === 0 ? '' : `${spread} / ${totalSpreads - 1}`;
 }
 
+function buildFlipOverlay(dirClass, sideClass, frontSlot, backSlot){
+  const overlay = document.createElement('div');
+  overlay.className = `flip-overlay ${sideClass} ${dirClass}`;
+  overlay.innerHTML =
+    `<div class="flip-face front ${frontSlot.cls}">${frontSlot.inner}</div>` +
+    `<div class="flip-face back ${backSlot.cls}">${backSlot.inner}</div>` +
+    `<div class="flip-shade"></div>`;
+  return overlay;
+}
+
+function animateShade(overlay){
+  const shade = overlay.querySelector('.flip-shade');
+  shade.animate(
+    [{opacity: 0}, {opacity: .55, offset: .5}, {opacity: 0}],
+    {duration: FLIP_MS, easing: 'linear'}
+  );
+}
+
+function finishFlip(overlay){
+  overlay.remove();
+  animating = false;
+  updateChrome();
+}
+
+function flipForward(nextSpread){
+  animating = true;
+  updateChrome();
+
+  const frontSlot = slotAt(spread, 'right');      // page currently showing, about to turn
+  const backSlot = slotAt(nextSpread, 'left');     // revealed as its back once turned
+
+  spread = nextSpread;
+  bookEl.innerHTML = fullSpreadHTML(spread);       // correct end-state, right away, underneath
+
+  const overlay = buildFlipOverlay('dir-fwd', 'right', frontSlot, backSlot);
+  bookEl.appendChild(overlay);
+
+  const anim = overlay.animate(
+    [{transform: 'rotateY(0deg)'}, {transform: 'rotateY(-180deg)'}],
+    {duration: FLIP_MS, easing: 'cubic-bezier(.45,.05,.35,1)'}
+  );
+  animateShade(overlay);
+  anim.onfinish = () => finishFlip(overlay);
+}
+
+function flipBackward(nextSpread){
+  animating = true;
+  updateChrome();
+
+  const frontSlot = slotAt(spread, 'left');        // page currently showing, about to turn back
+  const backSlot = slotAt(nextSpread, 'right');     // revealed once turned
+
+  spread = nextSpread;
+  bookEl.innerHTML = fullSpreadHTML(spread);
+
+  const overlay = buildFlipOverlay('dir-back', 'left', frontSlot, backSlot);
+  bookEl.appendChild(overlay);
+
+  const anim = overlay.animate(
+    [{transform: 'rotateY(0deg)'}, {transform: 'rotateY(180deg)'}],
+    {duration: FLIP_MS, easing: 'cubic-bezier(.45,.05,.35,1)'}
+  );
+  animateShade(overlay);
+  anim.onfinish = () => finishFlip(overlay);
+}
+
 function go(delta){
+  if (animating || delta === 0) return;
   const next = spread + delta;
   if (next < 0 || next > totalSpreads - 1) return;
-  spread = next;
-  renderSpread();
+  if (delta > 0) flipForward(next);
+  else flipBackward(next);
 }
 
 function escapeHtml(s){
@@ -435,7 +549,7 @@ fetch('/api/data').then(r => r.json()).then(data => {
     return;
   }
   totalSpreads = 1 + Math.ceil(DATA.pages.length / 2);
-  renderSpread();
+  renderSpreadInstant();
 });
 </script>
 </body>
