@@ -42,6 +42,17 @@ python3 ../photobook.py --open
 - Two pages shown at a time (a spread), like an open book.
 - Each page holds 1-3 photos in one of several varying layouts, framed like
   real photos.
+- Click a photo to zoom it to a full, framed view on black; click again (or
+  press Escape) to zoom back out.
+- **Edit mode**: click the book's background, or press space, to toggle it.
+  Each page then shows a black "R" button (top-left/top-right) that
+  auto-relayouts just that page - same photos, new arrangement. Exiting
+  edit mode (background click or space again) saves the current layout to
+  `photobook_state.json` in the served folder, so it's what you'll see next
+  time you run the app there. Photos added to the folder later show up as
+  new pages appended at the end, without disturbing anything you've laid
+  out. This only works against the live server (`python3 photobook.py`) -
+  a static export has nowhere to save to.
 
 More features to come.
 

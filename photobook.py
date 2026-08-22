@@ -29,11 +29,49 @@ from urllib.parse import urlparse, unquote
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
-COVER_LAYOUTS = ["1a", "1b"]
+STATE_FILENAME = "photobook_state.json"
+
 LAYOUTS_BY_COUNT = {
     1: ["1a", "1b"],
     2: ["2a", "2b", "2c"],
     3: ["3a", "3b", "3c"],
+}
+
+# Page-relative percentage rects {x, y, w, h} per photo slot for each named
+# arrangement. These are the one true source of page layout - baked into
+# each photo's x/y/w/h at generation time (and again by "auto-relayout"),
+# rather than referenced by name, so a page's layout is always just plain
+# numbers that a future drag/resize editor can read and overwrite freely.
+LAYOUT_RECTS = {
+    "1a": [{"x": 11, "y": 11, "w": 78, "h": 78}],
+    "1b": [{"x": 20, "y": 4, "w": 60, "h": 92}],
+    "2a": [
+        {"x": 15, "y": 4, "w": 70, "h": 44},
+        {"x": 15, "y": 52, "w": 70, "h": 44},
+    ],
+    "2b": [
+        {"x": 4, "y": 15, "w": 44, "h": 70},
+        {"x": 52, "y": 15, "w": 44, "h": 70},
+    ],
+    "2c": [
+        {"x": 8, "y": 4, "w": 55, "h": 48},
+        {"x": 37, "y": 48, "w": 55, "h": 48},
+    ],
+    "3a": [
+        {"x": 4, "y": 6, "w": 52, "h": 88},
+        {"x": 58, "y": 6, "w": 38, "h": 40},
+        {"x": 58, "y": 54, "w": 38, "h": 40},
+    ],
+    "3b": [
+        {"x": 2, "y": 20, "w": 29, "h": 60},
+        {"x": 35.5, "y": 20, "w": 29, "h": 60},
+        {"x": 69, "y": 20, "w": 29, "h": 60},
+    ],
+    "3c": [
+        {"x": 20, "y": 5, "w": 60, "h": 42},
+        {"x": 4, "y": 53, "w": 44, "h": 42},
+        {"x": 52, "y": 53, "w": 44, "h": 42},
+    ],
 }
 
 
@@ -45,14 +83,22 @@ def find_photos(folder: Path):
     return photos
 
 
-def build_album(folder: Path):
-    photos = find_photos(folder)
-    rng = random.Random()
+def lay_out_photo_group(group, rng):
+    """Turn a list of 1-3 Paths into a page's photo list, each with a
+    freshly picked position (x/y/w/h) and rotation."""
+    layout = rng.choice(LAYOUTS_BY_COUNT[len(group)])
+    rects = LAYOUT_RECTS[layout]
+    return [
+        {
+            "src": p.name,
+            "x": rect["x"], "y": rect["y"], "w": rect["w"], "h": rect["h"],
+            "rot": round(rng.uniform(-4.5, 4.5), 1),
+        }
+        for p, rect in zip(group, rects)
+    ]
 
-    cover_choices = photos[:]
-    rng.shuffle(cover_choices)
-    cover = [p.name for p in cover_choices[:5]]
 
+def build_pages(photos, rng):
     remaining = photos[:]
     rng.shuffle(remaining)
 
@@ -64,19 +110,70 @@ def build_album(folder: Path):
         size = rng.choice(choices)
         group = remaining[idx: idx + size]
         idx += size
-        layout = rng.choice(LAYOUTS_BY_COUNT[size])
-        page_photos = [
-            {"src": p.name, "rot": round(rng.uniform(-4.5, 4.5), 1)}
-            for p in group
-        ]
-        pages.append({"photos": page_photos, "layout": layout})
+        pages.append({"photos": lay_out_photo_group(group, rng)})
+    return pages
+
+
+def build_album(folder: Path):
+    photos = find_photos(folder)
+    rng = random.Random()
+
+    cover_choices = photos[:]
+    rng.shuffle(cover_choices)
+    cover = [p.name for p in cover_choices[:5]]
 
     return {
         "folder": folder.name or str(folder),
         "count": len(photos),
         "cover": cover,
-        "pages": pages,
+        "pages": build_pages(photos, rng),
     }
+
+
+def load_state(folder: Path):
+    """Load a previously-saved album from STATE_FILENAME, if present and
+    valid. Returns None if there's nothing usable to load."""
+    state_path = folder / STATE_FILENAME
+    if not state_path.is_file():
+        return None
+    try:
+        album = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(album, dict) or not isinstance(album.get("pages"), list):
+        return None
+    return album
+
+
+def reconcile_new_photos(folder: Path, album: dict):
+    """Append any photo files present in the folder but not referenced
+    anywhere in the (possibly saved/edited) album, as new auto-laid-out
+    pages, so nothing added to the folder later gets silently dropped."""
+    known = set(album.get("cover", []))
+    for page in album.get("pages", []):
+        for photo in page.get("photos", []):
+            known.add(photo.get("src"))
+
+    all_photos = find_photos(folder)
+    new_photos = [p for p in all_photos if p.name not in known]
+
+    if new_photos:
+        rng = random.Random()
+        album = dict(album)
+        album["pages"] = list(album.get("pages", [])) + build_pages(new_photos, rng)
+
+    album["count"] = len(all_photos)
+    return album
+
+
+def get_album(folder: Path):
+    """The album to serve/export for a folder: a saved+edited state if one
+    exists (reconciled against any photos added since), else a fresh
+    random one."""
+    album = load_state(folder)
+    if album is None:
+        return build_album(folder)
+    return reconcile_new_photos(folder, album)
 
 
 HTML_PAGE = """<!doctype html>
@@ -248,48 +345,65 @@ HTML_PAGE = """<!doctype html>
     object-fit:cover;
   }
 
-  .page-grid{
+  .page-canvas{
+    position:relative;
     width:100%;
     height:100%;
-    display:grid;
-    gap:18px;
   }
-  /* 1 photo layouts */
-  .layout-1a .page-grid, .layout-1b .page-grid{
-    grid-template-columns:1fr;
-    grid-template-rows:1fr;
-    place-items:center;
-  }
-  .layout-1a .frame{ width:78%; height:78%; }
-  .layout-1b .frame{ width:60%; height:92%; }
-
-  /* 2 photo layouts */
-  .layout-2a .page-grid{ grid-template-columns:1fr; grid-template-rows:1fr 1fr; place-items:center; }
-  .layout-2b .page-grid{ grid-template-columns:1fr 1fr; grid-template-rows:1fr; place-items:center; }
-  .layout-2c .page-grid{ grid-template-columns:1fr 1fr; grid-template-rows:1fr; place-items:center; }
-  .layout-2a .frame{ width:70%; height:44%; }
-  .layout-2b .frame{ width:88%; height:70%; }
-  .layout-2c .frame:nth-child(1){ width:70%; height:55%; align-self:start; justify-self:end; }
-  .layout-2c .frame:nth-child(2){ width:70%; height:55%; align-self:end; justify-self:start; }
-
-  /* 3 photo layouts */
-  .layout-3a .page-grid{ grid-template-columns:1.3fr 1fr; grid-template-rows:1fr 1fr; }
-  .layout-3a .frame:nth-child(1){ grid-row:1 / 3; width:92%; height:92%; align-self:center; justify-self:center; }
-  .layout-3a .frame:nth-child(2){ width:88%; height:80%; align-self:center; justify-self:center; }
-  .layout-3a .frame:nth-child(3){ width:88%; height:80%; align-self:center; justify-self:center; }
-  .layout-3b .page-grid{ grid-template-columns:1fr 1fr 1fr; grid-template-rows:1fr; place-items:center; }
-  .layout-3b .frame{ width:90%; height:60%; }
-  .layout-3c .page-grid{ grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; }
-  .layout-3c .frame:nth-child(1){ grid-column:1 / 3; width:60%; height:80%; align-self:center; justify-self:center; }
-  .layout-3c .frame:nth-child(2){ width:82%; height:75%; align-self:center; justify-self:center; }
-  .layout-3c .frame:nth-child(3){ width:82%; height:75%; align-self:center; justify-self:center; }
-
-  .page-label{
+  .page-canvas .frame{
     position:absolute;
-    bottom:14px;
-    font-size:11px;
-    color:var(--ink-soft);
-    letter-spacing:.08em;
+  }
+
+  /* ---- Edit mode ---- */
+  body.edit-mode .page:not(.blank)::after{
+    content:"";
+    position:absolute;
+    inset:14px;
+    border:1px dashed #00000030;
+    pointer-events:none;
+  }
+  body.edit-mode #book{ cursor:pointer; }
+  .relayout-btn{
+    display:none;
+    position:absolute;
+    top:14px;
+    width:30px;
+    height:30px;
+    background:#000;
+    color:#fff;
+    border:none;
+    font:700 14px/30px inherit;
+    text-align:center;
+    padding:0;
+    cursor:pointer;
+    z-index:15;
+    border-radius:3px;
+    box-shadow:0 4px 10px -2px #00000066;
+  }
+  .relayout-btn:hover{ background:#222; }
+  .relayout-btn.left{ left:14px; }
+  .relayout-btn.right{ right:14px; }
+  body.edit-mode .relayout-btn{ display:block; }
+
+  #toast{
+    position:absolute;
+    bottom:52px;
+    left:50%;
+    transform:translateX(-50%) translateY(8px);
+    background:#000000cc;
+    color:#f4ecdd;
+    font-size:12px;
+    letter-spacing:.04em;
+    padding:8px 16px;
+    border-radius:5px;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .25s, transform .25s;
+    z-index:30;
+  }
+  #toast.show{
+    opacity:1;
+    transform:translateX(-50%) translateY(0);
   }
 
   /* ---- Page flip ---- */
@@ -385,6 +499,7 @@ HTML_PAGE = """<!doctype html>
   <div id="book"></div>
   <button id="nextBtn" class="nav-btn" aria-label="Next">&#8250;</button>
   <div id="progress"></div>
+  <div id="toast"></div>
 </div>
 
 <script>
@@ -402,9 +517,29 @@ const progressEl = document.getElementById('progress');
 
 const PHOTO_PREFIX = '__PHOTO_PREFIX__';
 
+// Mirrors LAYOUTS_BY_COUNT / LAYOUT_RECTS in photobook.py - kept identical
+// so "auto-relayout" produces the same kind of arrangements as a fresh
+// album, without needing a round-trip to the server.
+const LAYOUTS_BY_COUNT = {
+  1: ['1a', '1b'],
+  2: ['2a', '2b', '2c'],
+  3: ['3a', '3b', '3c'],
+};
+const LAYOUT_RECTS = {
+  '1a': [{x: 11, y: 11, w: 78, h: 78}],
+  '1b': [{x: 20, y: 4, w: 60, h: 92}],
+  '2a': [{x: 15, y: 4, w: 70, h: 44}, {x: 15, y: 52, w: 70, h: 44}],
+  '2b': [{x: 4, y: 15, w: 44, h: 70}, {x: 52, y: 15, w: 44, h: 70}],
+  '2c': [{x: 8, y: 4, w: 55, h: 48}, {x: 37, y: 48, w: 55, h: 48}],
+  '3a': [{x: 4, y: 6, w: 52, h: 88}, {x: 58, y: 6, w: 38, h: 40}, {x: 58, y: 54, w: 38, h: 40}],
+  '3b': [{x: 2, y: 20, w: 29, h: 60}, {x: 35.5, y: 20, w: 29, h: 60}, {x: 69, y: 20, w: 29, h: 60}],
+  '3c': [{x: 20, y: 5, w: 60, h: 42}, {x: 4, y: 53, w: 44, h: 42}, {x: 52, y: 53, w: 44, h: 42}],
+};
+
 function frameHtml(photo){
   const rot = photo.rot || 0;
-  return `<div class="frame" data-rot="${rot}" style="transform:rotate(${rot}deg)">
+  const pos = `left:${photo.x}%; top:${photo.y}%; width:${photo.w}%; height:${photo.h}%;`;
+  return `<div class="frame" data-rot="${rot}" style="${pos} transform:rotate(${rot}deg)">
             <img src="${PHOTO_PREFIX}${encodeURIComponent(photo.src)}" alt="">
           </div>`;
 }
@@ -436,28 +571,36 @@ function coverInner(){
 
 function albumPageInner(page){
   const frames = page.photos.map(frameHtml).join('');
-  return `<div class="page-grid">${frames}</div>`;
+  return `<div class="page-canvas">${frames}</div>`;
 }
 
-// Returns the content ('cls' + 'inner' html) that belongs in a given
-// left/right slot of a given spread, independent of what's currently
+// Returns the content ('cls' + 'inner' html + 'pageIdx') that belongs in a
+// given left/right slot of a given spread, independent of what's currently
 // rendered - used both for the static book and for flip-animation faces.
+// pageIdx is null for the cover and blank slots (nothing to relayout there).
 function slotAt(spreadIdx, side){
   if (spreadIdx === 0){
-    if (side === 'left') return {cls: 'blank', inner: ''};
-    return {cls: '', inner: coverInner()};
+    if (side === 'left') return {cls: 'blank', inner: '', pageIdx: null};
+    return {cls: '', inner: coverInner(), pageIdx: null};
   }
   const pageIdx = (spreadIdx - 1) * 2 + (side === 'left' ? 0 : 1);
   const page = DATA.pages[pageIdx];
-  if (!page) return {cls: 'blank', inner: ''};
-  return {cls: 'layout-' + page.layout, inner: albumPageInner(page)};
+  if (!page) return {cls: 'blank', inner: '', pageIdx: null};
+  return {cls: '', inner: albumPageInner(page), pageIdx};
+}
+
+function pageHtml(slot, side){
+  const btn = slot.pageIdx !== null
+    ? `<button class="relayout-btn ${side}" data-page-idx="${slot.pageIdx}" title="Auto-relayout this page">R</button>`
+    : '';
+  const sideCls = side === 'left' ? 'page-left' : 'page-right';
+  return `<div class="page ${sideCls} ${slot.cls}">${slot.inner}${btn}</div>`;
 }
 
 function fullSpreadHTML(spreadIdx){
   const l = slotAt(spreadIdx, 'left');
   const r = slotAt(spreadIdx, 'right');
-  return `<div class="page page-left ${l.cls}">${l.inner}</div>` +
-         `<div class="page page-right ${r.cls}">${r.inner}</div>`;
+  return pageHtml(l, 'left') + pageHtml(r, 'right');
 }
 
 function renderSpreadInstant(){
@@ -504,9 +647,7 @@ function flipForward(nextSpread){
   const revealedRight = slotAt(nextSpread, 'right');  // sits underneath, revealed as the turning page uncovers it
   const staysLeft = slotAt(spread, 'left');           // untouched until the flip actually gets there
 
-  bookEl.innerHTML =
-    `<div class="page page-left ${staysLeft.cls}">${staysLeft.inner}</div>` +
-    `<div class="page page-right ${revealedRight.cls}">${revealedRight.inner}</div>`;
+  bookEl.innerHTML = pageHtml(staysLeft, 'left') + pageHtml(revealedRight, 'right');
 
   const overlay = buildFlipOverlay('dir-fwd', 'right', frontSlot, backSlot);
   bookEl.appendChild(overlay);
@@ -528,9 +669,7 @@ function flipBackward(nextSpread){
   const revealedLeft = slotAt(nextSpread, 'left');    // sits underneath, revealed as the turning page uncovers it
   const staysRight = slotAt(spread, 'right');         // untouched until the flip actually gets there
 
-  bookEl.innerHTML =
-    `<div class="page page-left ${revealedLeft.cls}">${revealedLeft.inner}</div>` +
-    `<div class="page page-right ${staysRight.cls}">${staysRight.inner}</div>`;
+  bookEl.innerHTML = pageHtml(revealedLeft, 'left') + pageHtml(staysRight, 'right');
 
   const overlay = buildFlipOverlay('dir-back', 'left', frontSlot, backSlot);
   bookEl.appendChild(overlay);
@@ -652,9 +791,81 @@ function closeLightbox(){
   }
 }
 
+// ---- Edit mode: click the book background or press space to toggle.
+// While on, an "R" button appears on each page to auto-relayout it.
+// Saves the current album to disk (via the server) the moment it's
+// turned off. ----
+
+let editMode = false;
+const lastLayoutByPage = {}; // pageIdx -> last layout name, just to avoid repeats
+
+const toastEl = document.getElementById('toast');
+let toastTimer = null;
+function showToast(msg){
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2600);
+}
+
+function toggleEditMode(){
+  if (animating || lightboxOpen) return;
+  editMode = !editMode;
+  document.body.classList.toggle('edit-mode', editMode);
+  if (!editMode) saveState();
+}
+
+function saveState(){
+  const payload = {
+    folder: DATA.folder,
+    count: DATA.count,
+    cover: DATA.cover,
+    pages: DATA.pages,
+  };
+  fetch('/api/save', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  }).then(res => {
+    if (!res.ok) throw new Error('save failed');
+  }).catch(() => {
+    showToast('Could not save (no server to save to)');
+  });
+}
+
+function relayoutPage(pageIdx){
+  const page = DATA.pages[pageIdx];
+  if (!page || !page.photos.length) return;
+
+  const count = page.photos.length;
+  const choices = LAYOUTS_BY_COUNT[count] || ['1a'];
+  let layout = choices[Math.floor(Math.random() * choices.length)];
+  if (choices.length > 1 && layout === lastLayoutByPage[pageIdx]){
+    layout = choices[(choices.indexOf(layout) + 1) % choices.length];
+  }
+  lastLayoutByPage[pageIdx] = layout;
+
+  const rects = LAYOUT_RECTS[layout];
+  page.photos.forEach((photo, i) => {
+    const rect = rects[i] || rects[rects.length - 1];
+    photo.x = rect.x; photo.y = rect.y; photo.w = rect.w; photo.h = rect.h;
+    photo.rot = Math.round((Math.random() * 9 - 4.5) * 10) / 10;
+  });
+
+  bookEl.innerHTML = fullSpreadHTML(spread);
+}
+
 bookEl.addEventListener('click', (e) => {
+  const relayoutBtn = e.target.closest('.relayout-btn');
+  if (relayoutBtn){
+    relayoutPage(parseInt(relayoutBtn.dataset.pageIdx, 10));
+    return;
+  }
+
   const img = e.target.closest('.frame img');
-  if (img) openLightbox(img);
+  if (img){ openLightbox(img); return; }
+
+  toggleEditMode();
 });
 
 lightbox.addEventListener('click', () => closeLightbox());
@@ -670,6 +881,7 @@ nextBtn.addEventListener('click', () => go(1));
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape'){ closeLightbox(); return; }
+  if (e.key === ' ' || e.code === 'Space'){ e.preventDefault(); toggleEditMode(); return; }
   if (e.key === 'ArrowRight') go(1);
   if (e.key === 'ArrowLeft') go(-1);
 });
@@ -710,6 +922,53 @@ fetch('__API_URL__').then(r => r.json()).then(data => {
 """
 
 
+def sanitize_album_payload(payload, folder: Path):
+    """Validate/clean a client-submitted album before it's trusted enough
+    to write to disk: every photo src must name a real file that's
+    already in this folder (never take a path from the client as-is -
+    that's how you get path traversal), and every position field must
+    actually be a number."""
+    if not isinstance(payload, dict):
+        return None
+
+    known_names = {p.name for p in find_photos(folder)}
+
+    def clean_src(entry):
+        src = entry.get("src") if isinstance(entry, dict) else None
+        return src if isinstance(src, str) and src in known_names else None
+
+    def num(entry, key, default):
+        value = entry.get(key, default)
+        return float(value) if isinstance(value, (int, float)) else default
+
+    cover = [s for s in payload.get("cover", []) if isinstance(s, str) and s in known_names]
+
+    pages = []
+    for page in payload.get("pages", []):
+        if not isinstance(page, dict):
+            continue
+        photos = []
+        for photo in page.get("photos", []):
+            src = clean_src(photo)
+            if src is None:
+                continue
+            photos.append({
+                "src": src,
+                "x": num(photo, "x", 0.0), "y": num(photo, "y", 0.0),
+                "w": num(photo, "w", 20.0), "h": num(photo, "h", 20.0),
+                "rot": num(photo, "rot", 0.0),
+            })
+        if photos:
+            pages.append({"photos": photos})
+
+    return {
+        "folder": folder.name or str(folder),
+        "count": len(known_names),
+        "cover": cover,
+        "pages": pages,
+    }
+
+
 class AlbumHandler(BaseHTTPRequestHandler):
     album = None
     photo_index = {}
@@ -726,13 +985,43 @@ class AlbumHandler(BaseHTTPRequestHandler):
             html = HTML_PAGE.replace("__API_URL__", "/api/data").replace("__PHOTO_PREFIX__", "/photo/")
             self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/api/data":
-            body = json.dumps(self.album).encode("utf-8")
-            self._send_bytes(body, "application/json")
+            self._send_json(self.album)
         elif path.startswith("/photo/"):
             name = path[len("/photo/"):]
             self._serve_photo(name)
         else:
             self.send_error(404, "Not found")
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = unquote(parsed.path)
+
+        if path != "/api/save":
+            self.send_error(404, "Not found")
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            payload = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            self._send_json({"ok": False, "error": "invalid JSON"}, status=400)
+            return
+
+        album = sanitize_album_payload(payload, self.folder)
+        if album is None:
+            self._send_json({"ok": False, "error": "invalid payload"}, status=400)
+            return
+
+        try:
+            state_path = self.folder / STATE_FILENAME
+            state_path.write_text(json.dumps(album, indent=2), encoding="utf-8")
+        except OSError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=500)
+            return
+
+        AlbumHandler.album = album
+        self._send_json({"ok": True})
 
     def _serve_photo(self, name):
         full_path = self.photo_index.get(name)
@@ -742,6 +1031,14 @@ class AlbumHandler(BaseHTTPRequestHandler):
         content_type = mimetypes.guess_type(full_path.name)[0] or "application/octet-stream"
         data = full_path.read_bytes()
         self._send_bytes(data, content_type, cache=True)
+
+    def _send_json(self, obj, status=200):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_bytes(self, data, content_type, cache=False):
         self.send_response(200)
@@ -757,7 +1054,7 @@ def export_static(folder: Path, out_dir: Path):
     """Bake a folder's album into a self-contained static site: index.html,
     data.json and a photos/ directory. No server required - works on any
     static host (Netlify, GitHub Pages, S3, a plain file:// open, etc.)."""
-    album = build_album(folder)
+    album = get_album(folder)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     photos_dir = out_dir / "photos"
@@ -817,7 +1114,7 @@ def main():
         print(f"Open {out_dir / 'index.html'} in a browser, or deploy the folder to any static host.")
         return
 
-    album = build_album(folder)
+    album = get_album(folder)
     photo_index = {p["src"]: folder / p["src"] for p in [{"src": s} for s in album["cover"]]}
     for page in album["pages"]:
         for photo in page["photos"]:
