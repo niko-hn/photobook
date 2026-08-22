@@ -399,6 +399,7 @@ HTML_PAGE = """<!doctype html>
     pointer-events:none;
   }
   body.edit-mode #book{ cursor:pointer; }
+  body.move-mode #book{ cursor:cell; }
   .relayout-btn{
     display:none;
     position:absolute;
@@ -693,7 +694,8 @@ function pageHtml(slot, side){
     ? `<button class="relayout-btn ${side}" data-page-idx="${slot.pageIdx}" title="Auto-relayout this page">${letter}</button>`
     : '';
   const sideCls = side === 'left' ? 'page-left' : 'page-right';
-  return `<div class="page ${sideCls} ${slot.cls}">${slot.inner}${btn}</div>`;
+  const pageIdxAttr = slot.pageIdx !== null ? ` data-page-idx="${slot.pageIdx}"` : '';
+  return `<div class="page ${sideCls} ${slot.cls}"${pageIdxAttr}>${slot.inner}${btn}</div>`;
 }
 
 function fullSpreadHTML(spreadIdx){
@@ -916,6 +918,7 @@ function showToast(msg){
 function cancelMoveMode(){
   moveMode = false;
   movingPhoto = null;
+  document.body.classList.remove('move-mode');
 }
 
 function toggleEditMode(){
@@ -986,6 +989,7 @@ function handleMoveButtonClick(pageIdx, photoIdx){
   if (!moveMode){
     movingPhoto = {photo, srcPageIdx: pageIdx, srcPhotoIdx: photoIdx};
     moveMode = true;
+    document.body.classList.add('move-mode');
     bookEl.innerHTML = fullSpreadHTML(spread);
     return;
   }
@@ -1017,6 +1021,22 @@ function performMove(destPageIdx, destPhotoIdx){
   bookEl.innerHTML = fullSpreadHTML(spread);
 }
 
+// Dropping on a page's blank background (rather than a specific photo's
+// number badge) appends the picked-up photo to the end of that page -
+// also the only way to target a page that's currently empty.
+function performMoveToEnd(destPageIdx){
+  const {photo, srcPageIdx, srcPhotoIdx} = movingPhoto;
+
+  DATA.pages[srcPageIdx].photos.splice(srcPhotoIdx, 1);
+  DATA.pages[destPageIdx].photos.push(photo);
+
+  applyLayoutToPage(srcPageIdx, false);
+  applyLayoutToPage(destPageIdx, false);
+
+  cancelMoveMode();
+  bookEl.innerHTML = fullSpreadHTML(spread);
+}
+
 bookEl.addEventListener('click', (e) => {
   if (animating) return;
 
@@ -1034,6 +1054,13 @@ bookEl.addEventListener('click', (e) => {
 
   const img = e.target.closest('.frame img');
   if (img){ openLightbox(img); return; }
+
+  if (moveMode){
+    const pageEl = e.target.closest('.page');
+    const pageIdx = pageEl ? pageEl.dataset.pageIdx : undefined;
+    if (pageIdx !== undefined) performMoveToEnd(parseInt(pageIdx, 10));
+    return; // stay in move mode on any other click (e.g. the blank cover)
+  }
 
   toggleEditMode();
 });

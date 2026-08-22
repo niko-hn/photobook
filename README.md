@@ -62,8 +62,10 @@ python3 ../photobook.py --open
   badge to insert the picked-up one right before it - both the source and
   destination pages re-layout to fit their new photo count (a page can end
   up with zero photos, or more than three; extra-large pages fall back to a
-  plain grid). Click the picked photo's own badge again, or press Escape,
-  to cancel without moving anything.
+  plain grid). Click a page's blank background instead of a badge to drop
+  the picked-up photo at the end of that page - also the only way to target
+  a page that's currently empty. Click the picked photo's own badge again,
+  or press Escape, to cancel without moving anything.
 
 More features to come.
 
