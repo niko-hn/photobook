@@ -814,6 +814,8 @@ let lightboxOpen = false;
 let lightboxSourceImg = null;
 let lightboxSourceRot = 0;
 let lightboxSourcePadding = '';
+let lightboxPageIdx = null;   // null when opened from a cover thumbnail -
+let lightboxPhotoIdx = null;  // there's no page sequence to navigate from there
 
 // Same polaroid proportions as .frame (8px 8px 22px 8px), scaled up for
 // a full-screen view instead of staying pinned at that fixed pixel size.
@@ -838,9 +840,11 @@ function fitFrameRect(naturalW, naturalH){
   };
 }
 
-function openLightbox(imgEl){
+function openLightbox(imgEl, pageIdx, photoIdx){
   if (animating || lightboxOpen) return;
   lightboxOpen = true;
+  lightboxPageIdx = pageIdx ?? null;
+  lightboxPhotoIdx = photoIdx ?? null;
   lightboxSourceImg = imgEl;
   const frameEl = imgEl.closest('.frame');
   lightboxSourceRot = parseFloat(frameEl?.dataset.rot || '0');
@@ -886,6 +890,8 @@ function closeLightbox(){
   lightbox.classList.remove('open');
   prevBtn.style.visibility = '';
   nextBtn.style.visibility = '';
+  lightboxPageIdx = null;
+  lightboxPhotoIdx = null;
 
   if (r){
     lightboxFrame.style.top = r.top + 'px';
@@ -895,6 +901,64 @@ function closeLightbox(){
     lightboxFrame.style.padding = lightboxSourcePadding;
     lightboxFrame.style.transform = `rotate(${lightboxSourceRot}deg)`;
   }
+}
+
+// Every photo in the whole album, in reading order (page order, then
+// photo order within each page) - what arrow keys walk through while the
+// lightbox is open.
+function flatPhotoList(){
+  const list = [];
+  DATA.pages.forEach((page, pageIdx) => {
+    page.photos.forEach((_, photoIdx) => list.push({pageIdx, photoIdx}));
+  });
+  return list;
+}
+
+function shiftLightboxPhoto(delta){
+  if (lightboxPageIdx === null) return; // opened from a cover thumbnail - no sequence to walk
+  const flat = flatPhotoList();
+  const curIdx = flat.findIndex(p => p.pageIdx === lightboxPageIdx && p.photoIdx === lightboxPhotoIdx);
+  if (curIdx === -1) return;
+  const nextIdx = curIdx + delta;
+  if (nextIdx < 0 || nextIdx >= flat.length) return; // clamp - no wraparound
+  const target = flat[nextIdx];
+  goToLightboxPhoto(target.pageIdx, target.photoIdx);
+}
+
+function goToLightboxPhoto(pageIdx, photoIdx){
+  const photo = DATA.pages[pageIdx] && DATA.pages[pageIdx].photos[photoIdx];
+  if (!photo) return;
+
+  lightboxPageIdx = pageIdx;
+  lightboxPhotoIdx = photoIdx;
+
+  // The book underneath is hidden behind the lightbox's opaque backdrop,
+  // but its page state still needs to track along - otherwise closing the
+  // lightbox would land back on whatever spread was showing before.
+  const targetSpread = Math.floor(pageIdx / 2) + 1;
+  if (targetSpread !== spread){
+    spread = targetSpread;
+    bookEl.innerHTML = fullSpreadHTML(spread);
+    updateChrome();
+  }
+
+  const img = findPhotoImg(pageIdx, photoIdx);
+  const frameEl = img ? img.closest('.frame') : null;
+  lightboxSourceImg = img;
+  lightboxSourceRot = parseFloat(frameEl?.dataset.rot || '0');
+  lightboxSourcePadding = frameEl ? getComputedStyle(frameEl).padding : lightboxSourcePadding;
+
+  lightboxImg.src = `${PHOTO_PREFIX}${encodeURIComponent(photo.src)}`;
+  const onLoad = () => {
+    const target = fitFrameRect(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
+    lightboxFrame.style.top = target.top + 'px';
+    lightboxFrame.style.left = target.left + 'px';
+    lightboxFrame.style.width = target.width + 'px';
+    lightboxFrame.style.height = target.height + 'px';
+    lightboxFrame.style.padding = target.padding;
+  };
+  if (lightboxImg.complete) onLoad();
+  else lightboxImg.onload = onLoad;
 }
 
 // ---- Edit mode: click the book background or press space to toggle.
@@ -1098,7 +1162,13 @@ bookEl.addEventListener('click', (e) => {
   }
 
   const img = e.target.closest('.frame img');
-  if (img){ openLightbox(img); return; }
+  if (img){
+    const frameBtn = img.closest('.frame').querySelector('.move-btn');
+    const pageIdx = frameBtn ? parseInt(frameBtn.dataset.pageIdx, 10) : null;
+    const photoIdx = frameBtn ? parseInt(frameBtn.dataset.photoIdx, 10) : null;
+    openLightbox(img, pageIdx, photoIdx);
+    return;
+  }
 
   if (moveMode){
     const pageEl = e.target.closest('.page');
@@ -1146,8 +1216,12 @@ document.addEventListener('keydown', (e) => {
   if (!editMode && !animating && /^[1-9]$/.test(e.key)){
     const target = findBadgeTarget(parseInt(e.key, 10));
     const img = target ? findPhotoImg(target.pageIdx, target.photoIdx) : null;
-    if (img) openLightbox(img);
+    if (img) openLightbox(img, target.pageIdx, target.photoIdx);
     return;
+  }
+  if (lightboxOpen){
+    if (e.key === 'ArrowRight'){ shiftLightboxPhoto(1); return; }
+    if (e.key === 'ArrowLeft'){ shiftLightboxPhoto(-1); return; }
   }
   if (e.key === 'ArrowRight') go(1);
   if (e.key === 'ArrowLeft') go(-1);

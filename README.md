@@ -48,7 +48,11 @@ python3 ../photobook.py --open
   press Escape) to zoom back out. Outside edit mode, pressing 1-9 does the
   same thing for the photo in that position on the current spread (left
   page first, then the right page continuing on - same numbering edit
-  mode's badges use, just not shown here).
+  mode's badges use, just not shown here). While zoomed in, left/right
+  arrow keys step to the previous/next photo in the whole album, crossing
+  page and spread boundaries freely - the book's own page turns along
+  behind the scenes, so it's showing the right spread whenever you zoom
+  back out.
 - **Edit mode**: click the book's background, or press space, to toggle it.
   Each page then shows a black button (L on the left page, R on the right)
   that auto-relayouts just that page - same photos, new arrangement; press
