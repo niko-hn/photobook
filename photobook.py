@@ -590,8 +590,9 @@ function slotAt(spreadIdx, side){
 }
 
 function pageHtml(slot, side){
+  const letter = side === 'left' ? 'L' : 'R';
   const btn = slot.pageIdx !== null
-    ? `<button class="relayout-btn ${side}" data-page-idx="${slot.pageIdx}" title="Auto-relayout this page">R</button>`
+    ? `<button class="relayout-btn ${side}" data-page-idx="${slot.pageIdx}" title="Auto-relayout this page">${letter}</button>`
     : '';
   const sideCls = side === 'left' ? 'page-left' : 'page-right';
   return `<div class="page ${sideCls} ${slot.cls}">${slot.inner}${btn}</div>`;
@@ -882,6 +883,16 @@ nextBtn.addEventListener('click', () => go(1));
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape'){ closeLightbox(); return; }
   if (e.key === ' ' || e.code === 'Space'){ e.preventDefault(); toggleEditMode(); return; }
+  if (editMode && (e.key === 'l' || e.key === 'L')){
+    const pageIdx = slotAt(spread, 'left').pageIdx;
+    if (pageIdx !== null) relayoutPage(pageIdx);
+    return;
+  }
+  if (editMode && (e.key === 'r' || e.key === 'R')){
+    const pageIdx = slotAt(spread, 'right').pageIdx;
+    if (pageIdx !== null) relayoutPage(pageIdx);
+    return;
+  }
   if (e.key === 'ArrowRight') go(1);
   if (e.key === 'ArrowLeft') go(-1);
 });
