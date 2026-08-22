@@ -454,8 +454,8 @@ function animateShade(overlay){
   );
 }
 
-function finishFlip(overlay){
-  overlay.remove();
+function finishFlip(){
+  bookEl.innerHTML = fullSpreadHTML(spread); // replaces the overlay too, now that it's done
   animating = false;
   updateChrome();
 }
@@ -464,11 +464,14 @@ function flipForward(nextSpread){
   animating = true;
   updateChrome();
 
-  const frontSlot = slotAt(spread, 'right');      // page currently showing, about to turn
-  const backSlot = slotAt(nextSpread, 'left');     // revealed as its back once turned
+  const frontSlot = slotAt(spread, 'right');         // page currently showing, about to turn
+  const backSlot = slotAt(nextSpread, 'left');        // revealed as its back, once fully turned
+  const revealedRight = slotAt(nextSpread, 'right');  // sits underneath, revealed as the turning page uncovers it
+  const staysLeft = slotAt(spread, 'left');           // untouched until the flip actually gets there
 
-  spread = nextSpread;
-  bookEl.innerHTML = fullSpreadHTML(spread);       // correct end-state, right away, underneath
+  bookEl.innerHTML =
+    `<div class="page page-left ${staysLeft.cls}">${staysLeft.inner}</div>` +
+    `<div class="page page-right ${revealedRight.cls}">${revealedRight.inner}</div>`;
 
   const overlay = buildFlipOverlay('dir-fwd', 'right', frontSlot, backSlot);
   bookEl.appendChild(overlay);
@@ -478,18 +481,21 @@ function flipForward(nextSpread){
     {duration: FLIP_MS, easing: 'cubic-bezier(.45,.05,.35,1)'}
   );
   animateShade(overlay);
-  anim.onfinish = () => finishFlip(overlay);
+  anim.onfinish = () => { spread = nextSpread; finishFlip(); };
 }
 
 function flipBackward(nextSpread){
   animating = true;
   updateChrome();
 
-  const frontSlot = slotAt(spread, 'left');        // page currently showing, about to turn back
-  const backSlot = slotAt(nextSpread, 'right');     // revealed once turned
+  const frontSlot = slotAt(spread, 'left');          // page currently showing, about to turn back
+  const backSlot = slotAt(nextSpread, 'right');       // revealed as its back, once fully turned
+  const revealedLeft = slotAt(nextSpread, 'left');    // sits underneath, revealed as the turning page uncovers it
+  const staysRight = slotAt(spread, 'right');         // untouched until the flip actually gets there
 
-  spread = nextSpread;
-  bookEl.innerHTML = fullSpreadHTML(spread);
+  bookEl.innerHTML =
+    `<div class="page page-left ${revealedLeft.cls}">${revealedLeft.inner}</div>` +
+    `<div class="page page-right ${staysRight.cls}">${staysRight.inner}</div>`;
 
   const overlay = buildFlipOverlay('dir-back', 'left', frontSlot, backSlot);
   bookEl.appendChild(overlay);
@@ -499,7 +505,7 @@ function flipBackward(nextSpread){
     {duration: FLIP_MS, easing: 'cubic-bezier(.45,.05,.35,1)'}
   );
   animateShade(overlay);
-  anim.onfinish = () => finishFlip(overlay);
+  anim.onfinish = () => { spread = nextSpread; finishFlip(); };
 }
 
 function go(delta){
