@@ -23,6 +23,7 @@ import shutil
 import socket
 import sys
 import threading
+import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -946,6 +947,15 @@ function saveState(){
     body: JSON.stringify(payload),
   }).then(res => {
     if (!res.ok) throw new Error('save failed');
+    return res.json();
+  }).then(result => {
+    // The server renames photo files to match reading order on every save,
+    // so refresh DATA (new filenames) and redraw or the on-screen <img>s
+    // would keep pointing at names that no longer exist on disk.
+    if (result && result.album){
+      DATA = result.album;
+      bookEl.innerHTML = fullSpreadHTML(spread);
+    }
   }).catch(() => {
     showToast('Could not save (no server to save to)');
   });
@@ -1210,6 +1220,51 @@ def sanitize_album_payload(payload, folder: Path):
     }
 
 
+def rename_photos_to_order(folder: Path, album: dict):
+    """Rename every photo file on disk to '<folder name> NNNN.<ext>', NNNN
+    being its 1-based position walking the pages in order (page order,
+    then photo order within each page) - so filenames always match
+    reading order. Only files whose name would actually change are
+    touched, and those go through a unique temp name first in a
+    separate pass, so overlapping old/new name sets can never collide
+    mid-rename (e.g. a straight swap between two photos). Returns a new
+    album dict with every src updated to match what's now on disk."""
+    ordered_srcs = [
+        photo["src"]
+        for page in album.get("pages", [])
+        for photo in page.get("photos", [])
+    ]
+
+    width = max(4, len(str(len(ordered_srcs))))
+    targets = {}  # old name -> new name, only where it actually differs
+    for i, old_name in enumerate(ordered_srcs):
+        ext = Path(old_name).suffix
+        new_name = f"{folder.name} {i + 1:0{width}d}{ext}"
+        if new_name != old_name and (folder / old_name).is_file():
+            targets[old_name] = new_name
+
+    temp_names = {}
+    for old_name in targets:
+        temp_name = f".rename-tmp-{uuid.uuid4().hex}{Path(old_name).suffix}"
+        (folder / old_name).rename(folder / temp_name)
+        temp_names[old_name] = temp_name
+
+    for old_name, new_name in targets.items():
+        (folder / temp_names[old_name]).rename(folder / new_name)
+
+    def remap(name):
+        return targets.get(name, name)
+
+    return {
+        **album,
+        "cover": [remap(s) for s in album.get("cover", [])],
+        "pages": [
+            {"photos": [{**p, "src": remap(p["src"])} for p in page.get("photos", [])]}
+            for page in album.get("pages", [])
+        ],
+    }
+
+
 class AlbumHandler(BaseHTTPRequestHandler):
     album = None
     photo_index = {}
@@ -1255,6 +1310,7 @@ class AlbumHandler(BaseHTTPRequestHandler):
             return
 
         try:
+            album = rename_photos_to_order(self.folder, album)
             state_path = self.folder / STATE_FILENAME
             state_path.write_text(json.dumps(album, indent=2), encoding="utf-8")
         except OSError as e:
@@ -1262,7 +1318,11 @@ class AlbumHandler(BaseHTTPRequestHandler):
             return
 
         AlbumHandler.album = album
-        self._send_json({"ok": True})
+        AlbumHandler.photo_index = {
+            src: self.folder / src
+            for src in set(album["cover"]) | {p["src"] for page in album["pages"] for p in page["photos"]}
+        }
+        self._send_json({"ok": True, "album": album})
 
     def _serve_photo(self, name):
         full_path = self.photo_index.get(name)

@@ -56,6 +56,12 @@ python3 ../photobook.py --open
   new pages appended at the end, without disturbing anything you've laid
   out. This only works against the live server (`python3 photobook.py`) -
   a static export has nowhere to save to.
+
+  **Every save also renames the photo files on disk** to match reading
+  order: `<folder name> 0001.<ext>`, `0002`, and so on (page order, then
+  photo order within each page). It's a genuine rename of your files, not
+  just a relabel in the saved state - worth knowing before pointing edit
+  mode at photos you care about keeping named the way they are now.
 - **Reordering photos** (also edit mode): every photo shows a small numbered
   badge in its top-left corner, numbered 1, 2, 3... restarting at 1 for each
   spread (left page first, then the right page continuing on) - so the
