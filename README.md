@@ -56,6 +56,14 @@ python3 ../photobook.py --open
   new pages appended at the end, without disturbing anything you've laid
   out. This only works against the live server (`python3 photobook.py`) -
   a static export has nowhere to save to.
+- **Reordering photos** (also edit mode): every photo shows a small numbered
+  badge (its position in the album, top-left corner). Click one to pick it
+  up, page around to find where it should go, then click another photo's
+  badge to insert the picked-up one right before it - both the source and
+  destination pages re-layout to fit their new photo count (a page can end
+  up with zero photos, or more than three; extra-large pages fall back to a
+  plain grid). Click the picked photo's own badge again, or press Escape,
+  to cancel without moving anything.
 
 More features to come.
 

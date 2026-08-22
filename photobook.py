@@ -15,6 +15,7 @@ No third-party dependencies - standard library only.
 
 import argparse
 import json
+import math
 import mimetypes
 import os
 import random
@@ -83,11 +84,46 @@ def find_photos(folder: Path):
     return photos
 
 
+def grid_rects(n):
+    """Fallback layout for photo counts the curated LAYOUT_RECTS templates
+    don't cover (0, or more than 3 - which "move" can produce by piling
+    photos onto one page): a plain, evenly-spaced grid."""
+    if n <= 0:
+        return []
+    cols = math.ceil(math.sqrt(n))
+    rows = math.ceil(n / cols)
+    gap = 4
+    cell_w = (100 - gap * (cols - 1)) / cols
+    cell_h = (100 - gap * (rows - 1)) / rows
+    inset = min(cell_w, cell_h) * 0.08
+
+    rects = []
+    for i in range(n):
+        r, c = divmod(i, cols)
+        items_in_row = min(cols, n - r * cols)
+        row_offset = (cols - items_in_row) * (cell_w + gap) / 2
+        rects.append({
+            "x": round(row_offset + c * (cell_w + gap) + inset, 2),
+            "y": round(r * (cell_h + gap) + inset, 2),
+            "w": round(cell_w - inset * 2, 2),
+            "h": round(cell_h - inset * 2, 2),
+        })
+    return rects
+
+
+def rects_for_count(count, rng):
+    if count <= 0:
+        return []
+    if count in LAYOUTS_BY_COUNT:
+        layout = rng.choice(LAYOUTS_BY_COUNT[count])
+        return LAYOUT_RECTS[layout]
+    return grid_rects(count)
+
+
 def lay_out_photo_group(group, rng):
-    """Turn a list of 1-3 Paths into a page's photo list, each with a
-    freshly picked position (x/y/w/h) and rotation."""
-    layout = rng.choice(LAYOUTS_BY_COUNT[len(group)])
-    rects = LAYOUT_RECTS[layout]
+    """Turn a list of Paths into a page's photo list, each with a freshly
+    picked position (x/y/w/h) and rotation."""
+    rects = rects_for_count(len(group), rng)
     return [
         {
             "src": p.name,
@@ -385,6 +421,29 @@ HTML_PAGE = """<!doctype html>
   .relayout-btn.right{ right:14px; }
   body.edit-mode .relayout-btn{ display:block; }
 
+  .move-btn{
+    display:none;
+    position:absolute;
+    top:-9px;
+    left:-9px;
+    min-width:22px;
+    height:22px;
+    padding:0 5px;
+    background:#000;
+    color:#fff;
+    border:2px solid #fff;
+    font:700 12px/18px inherit;
+    text-align:center;
+    cursor:pointer;
+    z-index:16;
+    border-radius:11px;
+    box-shadow:0 3px 8px -2px #00000066;
+  }
+  .move-btn:hover{ background:#222; }
+  .move-btn.picked{ background:var(--accent); }
+  body.edit-mode .move-btn{ display:block; }
+  .frame.picked{ outline:3px solid var(--accent); outline-offset:2px; }
+
   #toast{
     position:absolute;
     bottom:52px;
@@ -536,11 +595,42 @@ const LAYOUT_RECTS = {
   '3c': [{x: 20, y: 5, w: 60, h: 42}, {x: 4, y: 53, w: 44, h: 42}, {x: 52, y: 53, w: 44, h: 42}],
 };
 
-function frameHtml(photo){
+// Fallback for counts the curated templates above don't cover (0, or more
+// than 3 - which "move" can produce by piling photos onto one page).
+function gridRects(n){
+  if (n <= 0) return [];
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  const gap = 4;
+  const cellW = (100 - gap * (cols - 1)) / cols;
+  const cellH = (100 - gap * (rows - 1)) / rows;
+  const inset = Math.min(cellW, cellH) * 0.08;
+
+  const rects = [];
+  for (let i = 0; i < n; i++){
+    const r = Math.floor(i / cols), c = i % cols;
+    const itemsInRow = Math.min(cols, n - r * cols);
+    const rowOffset = (cols - itemsInRow) * (cellW + gap) / 2;
+    rects.push({
+      x: rowOffset + c * (cellW + gap) + inset,
+      y: r * (cellH + gap) + inset,
+      w: cellW - inset * 2,
+      h: cellH - inset * 2,
+    });
+  }
+  return rects;
+}
+
+function frameHtml(photo, num, pageIdx, photoIdx){
   const rot = photo.rot || 0;
   const pos = `left:${photo.x}%; top:${photo.y}%; width:${photo.w}%; height:${photo.h}%;`;
-  return `<div class="frame" data-rot="${rot}" style="${pos} transform:rotate(${rot}deg)">
+  const picked = moveMode && movingPhoto && movingPhoto.photo === photo;
+  const numBtn = (num != null)
+    ? `<button class="move-btn${picked ? ' picked' : ''}" data-page-idx="${pageIdx}" data-photo-idx="${photoIdx}" title="${picked ? 'Cancel move' : 'Move this picture'}">${num}</button>`
+    : '';
+  return `<div class="frame${picked ? ' picked' : ''}" data-rot="${rot}" style="${pos} transform:rotate(${rot}deg)">
             <img src="${PHOTO_PREFIX}${encodeURIComponent(photo.src)}" alt="">
+            ${numBtn}
           </div>`;
 }
 
@@ -569,9 +659,17 @@ function coverInner(){
   `;
 }
 
-function albumPageInner(page){
-  const frames = page.photos.map(frameHtml).join('');
+function albumPageInner(page, startNum, pageIdx){
+  const frames = page.photos.map((photo, i) => frameHtml(photo, startNum + i, pageIdx, i)).join('');
   return `<div class="page-canvas">${frames}</div>`;
+}
+
+// The 1-based number of the first photo on a page, counting through all
+// pages before it in order - purely derived, never stored.
+function pageStartNumber(pageIdx){
+  let n = 1;
+  for (let i = 0; i < pageIdx; i++) n += DATA.pages[i].photos.length;
+  return n;
 }
 
 // Returns the content ('cls' + 'inner' html + 'pageIdx') that belongs in a
@@ -586,7 +684,7 @@ function slotAt(spreadIdx, side){
   const pageIdx = (spreadIdx - 1) * 2 + (side === 'left' ? 0 : 1);
   const page = DATA.pages[pageIdx];
   if (!page) return {cls: 'blank', inner: '', pageIdx: null};
-  return {cls: '', inner: albumPageInner(page), pageIdx};
+  return {cls: '', inner: albumPageInner(page, pageStartNumber(pageIdx), pageIdx), pageIdx};
 }
 
 function pageHtml(slot, side){
@@ -800,6 +898,12 @@ function closeLightbox(){
 let editMode = false;
 const lastLayoutByPage = {}; // pageIdx -> last layout name, just to avoid repeats
 
+// Move mode: pick up a photo (click its number badge), page around freely,
+// then click another photo's number badge to insert the picked-up one
+// right before it. Clicking the picked photo's own badge again cancels.
+let moveMode = false;
+let movingPhoto = null; // {photo, srcPageIdx, srcPhotoIdx}
+
 const toastEl = document.getElementById('toast');
 let toastTimer = null;
 function showToast(msg){
@@ -809,11 +913,19 @@ function showToast(msg){
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2600);
 }
 
+function cancelMoveMode(){
+  moveMode = false;
+  movingPhoto = null;
+}
+
 function toggleEditMode(){
   if (animating || lightboxOpen) return;
   editMode = !editMode;
   document.body.classList.toggle('edit-mode', editMode);
-  if (!editMode) saveState();
+  if (!editMode){
+    cancelMoveMode();
+    saveState();
+  }
 }
 
 function saveState(){
@@ -834,32 +946,89 @@ function saveState(){
   });
 }
 
-function relayoutPage(pageIdx){
+// Computes and applies a fresh layout to a page in place - no re-render,
+// so callers can lay out more than one page and render once at the end.
+function applyLayoutToPage(pageIdx, avoidRepeat){
   const page = DATA.pages[pageIdx];
   if (!page || !page.photos.length) return;
 
   const count = page.photos.length;
-  const choices = LAYOUTS_BY_COUNT[count] || ['1a'];
-  let layout = choices[Math.floor(Math.random() * choices.length)];
-  if (choices.length > 1 && layout === lastLayoutByPage[pageIdx]){
-    layout = choices[(choices.indexOf(layout) + 1) % choices.length];
+  const choices = LAYOUTS_BY_COUNT[count];
+  let rects;
+  if (choices){
+    let layout = choices[Math.floor(Math.random() * choices.length)];
+    if (avoidRepeat && choices.length > 1 && layout === lastLayoutByPage[pageIdx]){
+      layout = choices[(choices.indexOf(layout) + 1) % choices.length];
+    }
+    lastLayoutByPage[pageIdx] = layout;
+    rects = LAYOUT_RECTS[layout];
+  } else {
+    rects = gridRects(count);
   }
-  lastLayoutByPage[pageIdx] = layout;
 
-  const rects = LAYOUT_RECTS[layout];
   page.photos.forEach((photo, i) => {
     const rect = rects[i] || rects[rects.length - 1];
     photo.x = rect.x; photo.y = rect.y; photo.w = rect.w; photo.h = rect.h;
     photo.rot = Math.round((Math.random() * 9 - 4.5) * 10) / 10;
   });
+}
 
+function relayoutPage(pageIdx){
+  if (animating) return;
+  applyLayoutToPage(pageIdx, true);
+  bookEl.innerHTML = fullSpreadHTML(spread);
+}
+
+function handleMoveButtonClick(pageIdx, photoIdx){
+  const photo = DATA.pages[pageIdx].photos[photoIdx];
+  if (!photo) return;
+
+  if (!moveMode){
+    movingPhoto = {photo, srcPageIdx: pageIdx, srcPhotoIdx: photoIdx};
+    moveMode = true;
+    bookEl.innerHTML = fullSpreadHTML(spread);
+    return;
+  }
+
+  if (photo === movingPhoto.photo){
+    cancelMoveMode();
+    bookEl.innerHTML = fullSpreadHTML(spread);
+    return;
+  }
+
+  performMove(pageIdx, photoIdx);
+}
+
+function performMove(destPageIdx, destPhotoIdx){
+  const {photo, srcPageIdx, srcPhotoIdx} = movingPhoto;
+
+  DATA.pages[srcPageIdx].photos.splice(srcPhotoIdx, 1);
+
+  let insertAt = destPhotoIdx;
+  if (destPageIdx === srcPageIdx && destPhotoIdx > srcPhotoIdx){
+    insertAt -= 1;
+  }
+  DATA.pages[destPageIdx].photos.splice(insertAt, 0, photo);
+
+  applyLayoutToPage(srcPageIdx, false);   // may now be empty - a no-op then
+  applyLayoutToPage(destPageIdx, false);
+
+  cancelMoveMode();
   bookEl.innerHTML = fullSpreadHTML(spread);
 }
 
 bookEl.addEventListener('click', (e) => {
+  if (animating) return;
+
   const relayoutBtn = e.target.closest('.relayout-btn');
   if (relayoutBtn){
     relayoutPage(parseInt(relayoutBtn.dataset.pageIdx, 10));
+    return;
+  }
+
+  const moveBtn = e.target.closest('.move-btn');
+  if (moveBtn){
+    handleMoveButtonClick(parseInt(moveBtn.dataset.pageIdx, 10), parseInt(moveBtn.dataset.photoIdx, 10));
     return;
   }
 
@@ -881,14 +1050,18 @@ prevBtn.addEventListener('click', () => go(-1));
 nextBtn.addEventListener('click', () => go(1));
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape'){ closeLightbox(); return; }
+  if (e.key === 'Escape'){
+    if (lightboxOpen){ closeLightbox(); return; }
+    if (moveMode){ cancelMoveMode(); bookEl.innerHTML = fullSpreadHTML(spread); return; }
+    return;
+  }
   if (e.key === ' ' || e.code === 'Space'){ e.preventDefault(); toggleEditMode(); return; }
-  if (editMode && (e.key === 'l' || e.key === 'L')){
+  if (editMode && !animating && (e.key === 'l' || e.key === 'L')){
     const pageIdx = slotAt(spread, 'left').pageIdx;
     if (pageIdx !== null) relayoutPage(pageIdx);
     return;
   }
-  if (editMode && (e.key === 'r' || e.key === 'R')){
+  if (editMode && !animating && (e.key === 'r' || e.key === 'R')){
     const pageIdx = slotAt(spread, 'right').pageIdx;
     if (pageIdx !== null) relayoutPage(pageIdx);
     return;
@@ -969,8 +1142,9 @@ def sanitize_album_payload(payload, folder: Path):
                 "w": num(photo, "w", 20.0), "h": num(photo, "h", 20.0),
                 "rot": num(photo, "rot", 0.0),
             })
-        if photos:
-            pages.append({"photos": photos})
+        # An empty page (0 photos, after a move emptied it) is kept, not
+        # dropped - otherwise page indices would shift on the next load.
+        pages.append({"photos": photos})
 
     return {
         "folder": folder.name or str(folder),
