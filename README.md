@@ -82,6 +82,12 @@ python3 ../photobook.py --open
   the picked-up photo at the end of that page - also the only way to target
   a page that's currently empty. Click the picked photo's own badge/number
   again, or press Escape, to cancel without moving anything.
+- **Page captions** (also edit mode): a black M/N button appears top-middle
+  of the left/right page (press M or N on the keyboard instead of clicking
+  if you prefer) and opens a small editor for that page's headline - shown
+  above the photos, in italic, in both edit and normal viewing mode once
+  set. Save, Clear, Escape, or clicking outside the editor all do what
+  they sound like.
 
 More features to come.
 

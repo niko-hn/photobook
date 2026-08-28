@@ -147,7 +147,7 @@ def build_pages(photos, rng):
         size = rng.choice(choices)
         group = remaining[idx: idx + size]
         idx += size
-        pages.append({"photos": lay_out_photo_group(group, rng)})
+        pages.append({"photos": lay_out_photo_group(group, rng), "headline": ""})
     return pages
 
 
@@ -447,6 +447,118 @@ HTML_PAGE = """<!doctype html>
   body.edit-mode .move-btn{ display:block; }
   .frame.picked{ outline:3px solid var(--accent); outline-offset:2px; }
 
+  .page-headline{
+    position:absolute;
+    top:16px;
+    left:50px;
+    right:50px;
+    text-align:center;
+    font-style:italic;
+    font-size:clamp(12px, 1.5vw, 16px);
+    color:var(--ink-soft);
+    letter-spacing:.02em;
+    line-height:1.3;
+    max-height:2.6em;
+    overflow:hidden;
+    pointer-events:none;
+    z-index:8;
+  }
+  .headline-btn{
+    display:none;
+    position:absolute;
+    top:14px;
+    left:50%;
+    transform:translateX(-50%);
+    width:30px;
+    height:30px;
+    background:#000;
+    color:#fff;
+    border:none;
+    font:700 13px/30px inherit;
+    text-align:center;
+    padding:0;
+    cursor:pointer;
+    z-index:15;
+    border-radius:3px;
+    box-shadow:0 4px 10px -2px #00000066;
+  }
+  .headline-btn:hover{ background:#222; }
+  body.edit-mode .headline-btn{ display:block; }
+
+  /* ---- Headline editor ---- */
+  #headlineModal{
+    position:fixed;
+    inset:0;
+    background:#00000066;
+    backdrop-filter:blur(2px);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .2s ease;
+    z-index:200;
+  }
+  #headlineModal.open{
+    opacity:1;
+    pointer-events:auto;
+  }
+  .headline-card{
+    background:var(--paper);
+    border-radius:10px;
+    box-shadow:0 30px 80px -20px #000000cc, 0 0 0 1px #00000022;
+    padding:26px 26px 18px;
+    width:min(90vw, 420px);
+    transform:translateY(10px) scale(.97);
+    transition:transform .2s ease;
+  }
+  #headlineModal.open .headline-card{
+    transform:translateY(0) scale(1);
+  }
+  .headline-card label{
+    display:block;
+    font-size:11px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    color:var(--ink-soft);
+    margin-bottom:10px;
+  }
+  .headline-card input{
+    display:block;
+    width:100%;
+    box-sizing:border-box;
+    font:italic 20px/1.4 "Iowan Old Style","Palatino Linotype",Georgia,serif;
+    color:var(--ink);
+    background:transparent;
+    border:none;
+    border-bottom:2px solid #00000022;
+    padding:4px 2px 10px;
+    outline:none;
+  }
+  .headline-card input:focus{ border-bottom-color:var(--accent); }
+  .headline-actions{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-top:22px;
+  }
+  .headline-actions-right{ display:flex; gap:8px; }
+  .headline-card button{
+    font:600 12px/1 "Iowan Old Style","Palatino Linotype",Georgia,serif;
+    letter-spacing:.03em;
+    padding:9px 16px;
+    border-radius:6px;
+    border:none;
+    cursor:pointer;
+    background:none;
+  }
+  #headlineClear{ color:var(--ink-soft); }
+  #headlineClear:hover{ color:var(--ink); }
+  #headlineCancel{ color:var(--ink-soft); }
+  #headlineCancel:hover{ background:#00000010; }
+  #headlineSave{ background:var(--ink); color:#fff; }
+  #headlineSave:hover{ background:#221a15; }
+
   #toast{
     position:absolute;
     bottom:52px;
@@ -677,30 +789,37 @@ function albumPageInner(page, startNum, pageIdx){
 // every visible badge is a small, unambiguous number a keypress can target.
 function slotAt(spreadIdx, side){
   if (spreadIdx === 0){
-    if (side === 'left') return {cls: 'blank', inner: '', pageIdx: null};
-    return {cls: '', inner: coverInner(), pageIdx: null};
+    if (side === 'left') return {cls: 'blank', inner: '', pageIdx: null, headline: ''};
+    return {cls: '', inner: coverInner(), pageIdx: null, headline: ''};
   }
   const leftPageIdx = (spreadIdx - 1) * 2;
   const pageIdx = side === 'left' ? leftPageIdx : leftPageIdx + 1;
   const page = DATA.pages[pageIdx];
-  if (!page) return {cls: 'blank', inner: '', pageIdx: null};
+  if (!page) return {cls: 'blank', inner: '', pageIdx: null, headline: ''};
 
   let startNum = 1;
   if (side === 'right'){
     const leftPage = DATA.pages[leftPageIdx];
     startNum = 1 + (leftPage ? leftPage.photos.length : 0);
   }
-  return {cls: '', inner: albumPageInner(page, startNum, pageIdx), pageIdx};
+  return {cls: '', inner: albumPageInner(page, startNum, pageIdx), pageIdx, headline: page.headline || ''};
 }
 
 function pageHtml(slot, side){
   const letter = side === 'left' ? 'L' : 'R';
-  const btn = slot.pageIdx !== null
+  const relayoutBtn = slot.pageIdx !== null
     ? `<button class="relayout-btn ${side}" data-page-idx="${slot.pageIdx}" title="Auto-relayout this page">${letter}</button>`
+    : '';
+  const headlineLetter = side === 'left' ? 'M' : 'N';
+  const headlineBtn = slot.pageIdx !== null
+    ? `<button class="headline-btn" data-page-idx="${slot.pageIdx}" title="Edit this page's caption">${headlineLetter}</button>`
+    : '';
+  const headlineText = slot.headline
+    ? `<div class="page-headline">${escapeHtml(slot.headline)}</div>`
     : '';
   const sideCls = side === 'left' ? 'page-left' : 'page-right';
   const pageIdxAttr = slot.pageIdx !== null ? ` data-page-idx="${slot.pageIdx}"` : '';
-  return `<div class="page ${sideCls} ${slot.cls}"${pageIdxAttr}>${slot.inner}${btn}</div>`;
+  return `<div class="page ${sideCls} ${slot.cls}"${pageIdxAttr}>${slot.inner}${headlineText}${relayoutBtn}${headlineBtn}</div>`;
 }
 
 function fullSpreadHTML(spreadIdx){
@@ -984,6 +1103,63 @@ function showToast(msg){
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2600);
 }
 
+// ---- Headline editor: the M/N buttons (top-middle of each page, edit
+// mode only) open this to set/change that page's caption. ----
+
+const headlineModal = document.createElement('div');
+headlineModal.id = 'headlineModal';
+headlineModal.innerHTML = `
+  <div class="headline-card">
+    <label for="headlineInput">Page caption</label>
+    <input type="text" id="headlineInput" maxlength="120" placeholder="Add a headline for this page…">
+    <div class="headline-actions">
+      <button type="button" id="headlineClear">Clear</button>
+      <div class="headline-actions-right">
+        <button type="button" id="headlineCancel">Cancel</button>
+        <button type="button" id="headlineSave">Save</button>
+      </div>
+    </div>
+  </div>
+`;
+document.body.appendChild(headlineModal);
+const headlineInput = document.getElementById('headlineInput');
+
+let headlineEditingPageIdx = null;
+
+function openHeadlineEditor(pageIdx){
+  if (animating) return;
+  const page = DATA.pages[pageIdx];
+  if (!page) return;
+  headlineEditingPageIdx = pageIdx;
+  headlineInput.value = page.headline || '';
+  headlineModal.classList.add('open');
+  headlineInput.focus();
+  headlineInput.select();
+}
+
+function closeHeadlineEditor(){
+  headlineModal.classList.remove('open');
+  headlineEditingPageIdx = null;
+}
+
+function saveHeadlineEditor(){
+  if (headlineEditingPageIdx === null) return;
+  const page = DATA.pages[headlineEditingPageIdx];
+  if (page) page.headline = headlineInput.value.trim();
+  closeHeadlineEditor();
+  bookEl.innerHTML = fullSpreadHTML(spread);
+}
+
+document.getElementById('headlineSave').addEventListener('click', saveHeadlineEditor);
+document.getElementById('headlineCancel').addEventListener('click', closeHeadlineEditor);
+document.getElementById('headlineClear').addEventListener('click', () => {
+  headlineInput.value = '';
+  saveHeadlineEditor();
+});
+headlineModal.addEventListener('click', (e) => {
+  if (e.target === headlineModal) closeHeadlineEditor();
+});
+
 function cancelMoveMode(){
   moveMode = false;
   movingPhoto = null;
@@ -1155,6 +1331,12 @@ bookEl.addEventListener('click', (e) => {
     return;
   }
 
+  const headlineBtn = e.target.closest('.headline-btn');
+  if (headlineBtn){
+    openHeadlineEditor(parseInt(headlineBtn.dataset.pageIdx, 10));
+    return;
+  }
+
   const moveBtn = e.target.closest('.move-btn');
   if (moveBtn){
     handleMoveButtonClick(parseInt(moveBtn.dataset.pageIdx, 10), parseInt(moveBtn.dataset.photoIdx, 10));
@@ -1192,6 +1374,11 @@ prevBtn.addEventListener('click', () => go(-1));
 nextBtn.addEventListener('click', () => go(1));
 
 document.addEventListener('keydown', (e) => {
+  if (headlineModal.classList.contains('open')){
+    if (e.key === 'Escape'){ closeHeadlineEditor(); return; }
+    if (e.key === 'Enter'){ saveHeadlineEditor(); return; }
+    return; // let every other key type normally into the input, nothing else
+  }
   if (e.key === 'Escape'){
     if (lightboxOpen){ closeLightbox(); return; }
     if (moveMode){ cancelMoveMode(); bookEl.innerHTML = fullSpreadHTML(spread); return; }
@@ -1206,6 +1393,16 @@ document.addEventListener('keydown', (e) => {
   if (editMode && !animating && (e.key === 'r' || e.key === 'R')){
     const pageIdx = slotAt(spread, 'right').pageIdx;
     if (pageIdx !== null) relayoutPage(pageIdx);
+    return;
+  }
+  if (editMode && !animating && (e.key === 'm' || e.key === 'M')){
+    const pageIdx = slotAt(spread, 'left').pageIdx;
+    if (pageIdx !== null){ e.preventDefault(); openHeadlineEditor(pageIdx); }
+    return;
+  }
+  if (editMode && !animating && (e.key === 'n' || e.key === 'N')){
+    const pageIdx = slotAt(spread, 'right').pageIdx;
+    if (pageIdx !== null){ e.preventDefault(); openHeadlineEditor(pageIdx); }
     return;
   }
   if (editMode && !animating && /^[1-9]$/.test(e.key)){
@@ -1299,9 +1496,12 @@ def sanitize_album_payload(payload, folder: Path):
                 "w": num(photo, "w", 20.0), "h": num(photo, "h", 20.0),
                 "rot": num(photo, "rot", 0.0),
             })
+        headline = page.get("headline", "")
+        if not isinstance(headline, str):
+            headline = ""
         # An empty page (0 photos, after a move emptied it) is kept, not
         # dropped - otherwise page indices would shift on the next load.
-        pages.append({"photos": photos})
+        pages.append({"photos": photos, "headline": headline[:200]})
 
     return {
         "folder": folder.name or str(folder),
@@ -1350,7 +1550,7 @@ def rename_photos_to_order(folder: Path, album: dict):
         **album,
         "cover": [remap(s) for s in album.get("cover", [])],
         "pages": [
-            {"photos": [{**p, "src": remap(p["src"])} for p in page.get("photos", [])]}
+            {**page, "photos": [{**p, "src": remap(p["src"])} for p in page.get("photos", [])]}
             for page in album.get("pages", [])
         ],
     }
