@@ -449,19 +449,22 @@ HTML_PAGE = """<!doctype html>
 
   .page-headline{
     position:absolute;
-    top:16px;
-    left:50px;
-    right:50px;
+    top:10px;
+    left:44px;
+    right:44px;
     text-align:center;
-    font-style:italic;
-    font-size:clamp(12px, 1.5vw, 16px);
-    color:var(--ink-soft);
-    letter-spacing:.02em;
-    line-height:1.3;
-    max-height:2.6em;
+    font-weight:700;
+    font-size:clamp(20px, 3.6vw, 40px);
+    color:var(--ink);
+    letter-spacing:-.01em;
+    line-height:1.15;
+    max-height:2.4em;
     overflow:hidden;
     pointer-events:none;
     z-index:8;
+    text-shadow:
+      0 0 10px var(--paper), 0 0 10px var(--paper), 0 0 10px var(--paper),
+      0 0 20px var(--paper), 0 0 20px var(--paper);
   }
   .headline-btn{
     display:none;
