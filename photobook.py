@@ -299,6 +299,7 @@ HTML_PAGE = """<!doctype html>
     align-items:center;
     gap:28px;
     text-align:center;
+    margin:auto 0;
   }
   .cover-title{
     font-size:clamp(22px,3.6vw,40px);
@@ -596,8 +597,9 @@ HTML_PAGE = """<!doctype html>
     background:var(--paper);
     padding:5%;
     display:flex;
+    flex-direction:column;
     align-items:stretch;
-    justify-content:center;
+    justify-content:flex-start;
     overflow:hidden;
     backface-visibility:hidden;
     box-shadow:0 0 40px -4px #00000066;
@@ -787,20 +789,27 @@ function albumPageInner(page, startNum, pageIdx){
 // every visible badge is a small, unambiguous number a keypress can target.
 function slotAt(spreadIdx, side){
   if (spreadIdx === 0){
-    if (side === 'left') return {cls: 'blank', inner: '', pageIdx: null, headline: ''};
-    return {cls: '', inner: coverInner(), pageIdx: null, headline: ''};
+    if (side === 'left') return {cls: 'blank', inner: '', pageIdx: null};
+    return {cls: '', inner: coverInner(), pageIdx: null};
   }
   const leftPageIdx = (spreadIdx - 1) * 2;
   const pageIdx = side === 'left' ? leftPageIdx : leftPageIdx + 1;
   const page = DATA.pages[pageIdx];
-  if (!page) return {cls: 'blank', inner: '', pageIdx: null, headline: ''};
+  if (!page) return {cls: 'blank', inner: '', pageIdx: null};
 
   let startNum = 1;
   if (side === 'right'){
     const leftPage = DATA.pages[leftPageIdx];
     startNum = 1 + (leftPage ? leftPage.photos.length : 0);
   }
-  return {cls: '', inner: albumPageInner(page, startNum, pageIdx), pageIdx, headline: page.headline || ''};
+  // The headline lives inside 'inner' (not appended separately by pageHtml)
+  // so it's included wherever this slot's content ends up rendered -
+  // including the flip-face overlay mid-animation, not just the static page.
+  const headlineHtml = page.headline
+    ? `<div class="page-headline">${escapeHtml(page.headline)}</div>`
+    : '';
+  const inner = headlineHtml + albumPageInner(page, startNum, pageIdx);
+  return {cls: '', inner, pageIdx};
 }
 
 function pageHtml(slot, side){
@@ -812,15 +821,11 @@ function pageHtml(slot, side){
   const headlineBtn = slot.pageIdx !== null
     ? `<button class="headline-btn" data-page-idx="${slot.pageIdx}" title="Edit this page's caption">${headlineLetter}</button>`
     : '';
-  const headlineText = slot.headline
-    ? `<div class="page-headline">${escapeHtml(slot.headline)}</div>`
-    : '';
   const sideCls = side === 'left' ? 'page-left' : 'page-right';
   const pageIdxAttr = slot.pageIdx !== null ? ` data-page-idx="${slot.pageIdx}"` : '';
-  // headlineText before slot.inner: in the page's column flex layout, DOM
-  // order is visual order, so the headline sits above the photos, not over
-  // them - the photo canvas gets whatever height is left after it.
-  return `<div class="page ${sideCls} ${slot.cls}"${pageIdxAttr}>${headlineText}${slot.inner}${relayoutBtn}${headlineBtn}</div>`;
+  // slot.inner already carries the headline (see slotAt) ahead of the photo
+  // canvas, so it renders correctly here AND in the flip-face overlay.
+  return `<div class="page ${sideCls} ${slot.cls}"${pageIdxAttr}>${slot.inner}${relayoutBtn}${headlineBtn}</div>`;
 }
 
 function fullSpreadHTML(spreadIdx){
