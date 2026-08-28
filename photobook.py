@@ -449,13 +449,13 @@ HTML_PAGE = """<!doctype html>
 
   .page-headline{
     position:absolute;
-    top:10px;
-    left:44px;
-    right:44px;
+    top:60%;
+    left:9%;
+    right:9%;
     text-align:center;
     font-weight:700;
-    font-size:clamp(20px, 3.6vw, 40px);
-    color:var(--ink);
+    font-size:clamp(20px, 3.4vw, 38px);
+    color:var(--accent);
     letter-spacing:-.01em;
     line-height:1.15;
     max-height:2.4em;
@@ -465,6 +465,16 @@ HTML_PAGE = """<!doctype html>
     text-shadow:
       0 0 10px var(--paper), 0 0 10px var(--paper), 0 0 10px var(--paper),
       0 0 20px var(--paper), 0 0 20px var(--paper);
+  }
+  .page-headline::after{
+    content:"";
+    display:block;
+    width:56px;
+    height:3px;
+    margin:12px auto 0;
+    background:var(--accent);
+    opacity:.5;
+    border-radius:2px;
   }
   .headline-btn{
     display:none;
@@ -714,6 +724,11 @@ const LAYOUT_RECTS = {
   '3c': [{x: 20, y: 5, w: 60, h: 42}, {x: 4, y: 53, w: 44, h: 42}, {x: 52, y: 53, w: 44, h: 42}],
 };
 
+// A small, slight tilt per page headline - deterministic by page index, not
+// random on every render - so it reads as part of the scattered-photo
+// collage rather than a pinned-straight UI label.
+const HEADLINE_ROTATIONS = [-2.4, 1.8, -1.3, 2.2, -1.6, 1.1];
+
 // Fallback for counts the curated templates above don't cover (0, or more
 // than 3 - which "move" can produce by piling photos onto one page).
 function gridRects(n){
@@ -817,8 +832,9 @@ function pageHtml(slot, side){
   const headlineBtn = slot.pageIdx !== null
     ? `<button class="headline-btn" data-page-idx="${slot.pageIdx}" title="Edit this page's caption">${headlineLetter}</button>`
     : '';
+  const headlineRot = HEADLINE_ROTATIONS[(slot.pageIdx ?? 0) % HEADLINE_ROTATIONS.length];
   const headlineText = slot.headline
-    ? `<div class="page-headline">${escapeHtml(slot.headline)}</div>`
+    ? `<div class="page-headline" style="transform:rotate(${headlineRot}deg)">${escapeHtml(slot.headline)}</div>`
     : '';
   const sideCls = side === 'left' ? 'page-left' : 'page-right';
   const pageIdxAttr = slot.pageIdx !== null ? ` data-page-idx="${slot.pageIdx}"` : '';
