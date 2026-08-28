@@ -264,7 +264,7 @@ HTML_PAGE = """<!doctype html>
     background:
       linear-gradient(90deg, #00000010, transparent 24px),
       var(--paper);
-    padding:5%;
+    padding:clamp(18px, 2.5vw, 40px);
     display:flex;
     flex-direction:column;
     align-items:stretch;
@@ -595,7 +595,7 @@ HTML_PAGE = """<!doctype html>
     position:absolute;
     inset:0;
     background:var(--paper);
-    padding:5%;
+    padding:clamp(18px, 2.5vw, 40px);
     display:flex;
     flex-direction:column;
     align-items:stretch;
