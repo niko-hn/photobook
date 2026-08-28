@@ -85,9 +85,10 @@ python3 ../photobook.py --open
 - **Page captions** (also edit mode): a black M/N button appears top-middle
   of the left/right page (press M or N on the keyboard instead of clicking
   if you prefer) and opens a small editor for that page's headline - shown
-  above the photos, in italic, in both edit and normal viewing mode once
-  set. Save, Clear, Escape, or clicking outside the editor all do what
-  they sound like.
+  in bold black above the photos, in both edit and normal viewing mode once
+  set, with the photos making room for it rather than it overlaying them.
+  Save, Clear, Escape, or clicking outside the editor all do what they
+  sound like.
 
 More features to come.
 
