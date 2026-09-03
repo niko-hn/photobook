@@ -869,6 +869,16 @@ function finishFlip(){
   updateChrome();
 }
 
+// The animation's 'finish' event can fire a moment before the browser has
+// actually painted that final composited frame (more visible with real GPU
+// compositing than in the testing here). Swapping the DOM synchronously in
+// that callback risks a stale frame - the tail end of the turning page -
+// still being what's on screen for an instant. Waiting two animation
+// frames is a standard way to guarantee "wait until it's actually painted".
+function afterPaint(callback){
+  requestAnimationFrame(() => requestAnimationFrame(callback));
+}
+
 function flipForward(nextSpread){
   animating = true;
   updateChrome();
@@ -885,10 +895,10 @@ function flipForward(nextSpread){
 
   const anim = overlay.animate(
     [{transform: 'rotateY(0deg)'}, {transform: 'rotateY(-180deg)'}],
-    {duration: FLIP_MS, easing: 'cubic-bezier(.45,.05,.35,1)'}
+    {duration: FLIP_MS, easing: 'cubic-bezier(.45,.05,.35,1)', fill: 'forwards'}
   );
   animateShade(overlay);
-  anim.onfinish = () => { spread = nextSpread; finishFlip(); };
+  anim.onfinish = () => { spread = nextSpread; afterPaint(finishFlip); };
 }
 
 function flipBackward(nextSpread){
@@ -907,10 +917,10 @@ function flipBackward(nextSpread){
 
   const anim = overlay.animate(
     [{transform: 'rotateY(0deg)'}, {transform: 'rotateY(180deg)'}],
-    {duration: FLIP_MS, easing: 'cubic-bezier(.45,.05,.35,1)'}
+    {duration: FLIP_MS, easing: 'cubic-bezier(.45,.05,.35,1)', fill: 'forwards'}
   );
   animateShade(overlay);
-  anim.onfinish = () => { spread = nextSpread; finishFlip(); };
+  anim.onfinish = () => { spread = nextSpread; afterPaint(finishFlip); };
 }
 
 function go(delta){
