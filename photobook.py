@@ -23,6 +23,7 @@ import shutil
 import socket
 import sys
 import threading
+import time
 import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -164,6 +165,7 @@ def build_album(folder: Path):
         "count": len(photos),
         "cover": cover,
         "pages": build_pages(photos, rng),
+        "version": 0,
     }
 
 
@@ -179,6 +181,7 @@ def load_state(folder: Path):
         return None
     if not isinstance(album, dict) or not isinstance(album.get("pages"), list):
         return None
+    album.setdefault("version", 0)
     return album
 
 
@@ -692,6 +695,17 @@ const progressEl = document.getElementById('progress');
 
 const PHOTO_PREFIX = '__PHOTO_PREFIX__';
 
+// A save can rename a file so the same name ends up pointing at different
+// bytes (e.g. two photos swapping places). The browser caches /photo/<name>
+// by URL, so without a cache-busting query string a stale cached image can
+// keep showing under a reused name after reordering - looking exactly like
+// a photo-ordering bug even though the file and saved order are correct.
+// DATA.version changes on every save, so appending it here forces a fresh
+// fetch whenever anything could have moved.
+function photoUrl(src){
+  return `${PHOTO_PREFIX}${encodeURIComponent(src)}?v=${DATA.version || 0}`;
+}
+
 // Mirrors LAYOUTS_BY_COUNT / LAYOUT_RECTS in photobook.py - kept identical
 // so "auto-relayout" produces the same kind of arrangements as a fresh
 // album, without needing a round-trip to the server.
@@ -745,7 +759,7 @@ function frameHtml(photo, num, pageIdx, photoIdx){
     ? `<button class="move-btn${picked ? ' picked' : ''}" data-page-idx="${pageIdx}" data-photo-idx="${photoIdx}" title="${picked ? 'Cancel move' : 'Move this picture'}">${num}</button>`
     : '';
   return `<div class="frame${picked ? ' picked' : ''}" data-rot="${rot}" style="${pos} transform:rotate(${rot}deg)">
-            <img src="${PHOTO_PREFIX}${encodeURIComponent(photo.src)}" alt="">
+            <img src="${photoUrl(photo.src)}" alt="">
             ${numBtn}
           </div>`;
 }
@@ -761,7 +775,7 @@ function coverInner(){
     ];
     const p = positions[i % positions.length];
     return `<div class="frame" data-rot="${p.rot}" style="position:absolute; top:${p.top}; left:${p.left}; width:110px; height:110px; transform:rotate(${p.rot}deg); z-index:${i}">
-              <img src="${PHOTO_PREFIX}${encodeURIComponent(src)}" alt="">
+              <img src="${photoUrl(src)}" alt="">
             </div>`;
   }).join('');
 
@@ -1083,7 +1097,7 @@ function goToLightboxPhoto(pageIdx, photoIdx){
   lightboxSourceRot = parseFloat(frameEl?.dataset.rot || '0');
   lightboxSourcePadding = frameEl ? getComputedStyle(frameEl).padding : lightboxSourcePadding;
 
-  lightboxImg.src = `${PHOTO_PREFIX}${encodeURIComponent(photo.src)}`;
+  lightboxImg.src = photoUrl(photo.src);
   const onLoad = () => {
     const target = fitFrameRect(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
     lightboxFrame.style.top = target.top + 'px';
@@ -1618,6 +1632,15 @@ class AlbumHandler(BaseHTTPRequestHandler):
 
         try:
             album = rename_photos_to_order(self.folder, album)
+            # Renaming can reassign a filename to different photo bytes (a
+            # straight swap between two positions, say). Browsers cache
+            # /photo/<name> responses by URL, so without something in the
+            # URL that changes on every save, a stale cached image can keep
+            # showing under a reused name - looking exactly like a photo
+            # ordering bug. Bumping this each save and having the client
+            # append it as a query string (see PHOTO_PREFIX usages) forces
+            # a fresh fetch for every photo after any save.
+            album["version"] = int(time.time() * 1000)
             state_path = self.folder / STATE_FILENAME
             state_path.write_text(json.dumps(album, indent=2), encoding="utf-8")
         except OSError as e:
