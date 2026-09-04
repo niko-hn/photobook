@@ -79,9 +79,11 @@ python3 ../photobook.py --open
   destination pages re-layout to fit their new photo count (a page can end
   up with zero photos, or more than three; extra-large pages fall back to a
   plain grid). Click a page's blank background instead of a badge to drop
-  the picked-up photo at the end of that page - also the only way to target
-  a page that's currently empty. Click the picked photo's own badge/number
-  again, or press Escape, to cancel without moving anything.
+  the picked-up photo at the end of that page. A page with no photos on it
+  shows a dashed box with its own numbered badge in the same sequence, so
+  it's both an obvious click target and reachable by pressing its number,
+  same as a real photo. Click the picked photo's own badge/number again, or
+  press Escape, to cancel without moving anything.
 - **Page captions** (also edit mode): a black M/N button appears top-middle
   of the left/right page (press M or N on the keyboard instead of clicking
   if you prefer) and opens a small editor for that page's headline - shown

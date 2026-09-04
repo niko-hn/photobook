@@ -452,6 +452,29 @@ HTML_PAGE = """<!doctype html>
   body.edit-mode .move-btn{ display:block; }
   .frame.picked{ outline:3px solid var(--accent); outline-offset:2px; }
 
+  /* A page with no photos still needs a visible, numbered drop target -
+     otherwise it's just blank space with no clue it's clickable, and no
+     badge for a keyboard move to land on. */
+  .empty-slot{
+    display:none;
+    position:absolute;
+    inset:8%;
+    align-items:center;
+    justify-content:center;
+    border:2px dashed #00000030;
+    border-radius:10px;
+  }
+  body.edit-mode .empty-slot{ display:flex; }
+  .empty-slot .move-btn{
+    position:static;
+    width:34px;
+    height:34px;
+    min-width:34px;
+    border-radius:50%;
+    font-size:14px;
+    line-height:30px;
+  }
+
   .page-headline{
     flex:0 0 auto;
     text-align:center;
@@ -790,8 +813,21 @@ function coverInner(){
 }
 
 function albumPageInner(page, startNum, pageIdx){
+  if (page.photos.length === 0){
+    return `<div class="page-canvas">${emptySlotHtml(startNum, pageIdx)}</div>`;
+  }
   const frames = page.photos.map((photo, i) => frameHtml(photo, startNum + i, pageIdx, i)).join('');
   return `<div class="page-canvas">${frames}</div>`;
+}
+
+// A visible "drop it here" target for a page with no photos: a dashed box
+// carrying the same kind of numbered badge every photo gets, so an empty
+// page is both an obvious mouse target and reachable by digit key, same as
+// a real photo would be - not just an invisible click on blank background.
+function emptySlotHtml(num, pageIdx){
+  return `<div class="empty-slot">
+            <button class="move-btn" data-page-idx="${pageIdx}" data-photo-idx="${EMPTY_SLOT}" title="Drop picture here">${num}</button>
+          </div>`;
 }
 
 // Returns the content ('cls' + 'inner' html + 'pageIdx') that belongs in a
@@ -814,7 +850,10 @@ function slotAt(spreadIdx, side){
   let startNum = 1;
   if (side === 'right'){
     const leftPage = DATA.pages[leftPageIdx];
-    startNum = 1 + (leftPage ? leftPage.photos.length : 0);
+    // An empty page still claims one badge number (its "drop here"
+    // placeholder), so every page - even an empty one - has a number a
+    // keypress can reach, the same way move mode already targets one.
+    startNum = 1 + (leftPage ? Math.max(1, leftPage.photos.length) : 0);
   }
   // The headline lives inside 'inner' (not appended separately by pageHtml)
   // so it's included wherever this slot's content ends up rendered -
@@ -1124,6 +1163,11 @@ const lastLayoutByPage = {}; // pageIdx -> last layout name, just to avoid repea
 let moveMode = false;
 let movingPhoto = null; // {photo, srcPageIdx, srcPhotoIdx}
 
+// Sentinel photoIdx for an empty page's placeholder badge (see
+// emptySlotHtml) - there's no real photo at that index to pick up, just a
+// drop target for whatever's currently picked up.
+const EMPTY_SLOT = -1;
+
 const toastEl = document.getElementById('toast');
 let toastTimer = null;
 function showToast(msg){
@@ -1268,7 +1312,8 @@ function relayoutPage(pageIdx){
 
 // Finds which (pageIdx, photoIdx) currently shows a given badge number on
 // the spread that's on screen right now - same numbering slotAt() renders,
-// so a keypress lands on exactly the photo whose badge it matches.
+// so a keypress lands on exactly the photo (or empty-page placeholder)
+// whose badge it matches.
 function findBadgeTarget(num){
   if (spread === 0 || num < 1) return null;
   const leftPageIdx = (spread - 1) * 2;
@@ -1276,12 +1321,18 @@ function findBadgeTarget(num){
   const leftPage = DATA.pages[leftPageIdx];
   const rightPage = DATA.pages[rightPageIdx];
 
-  if (leftPage && num <= leftPage.photos.length){
-    return {pageIdx: leftPageIdx, photoIdx: num - 1};
+  if (leftPage){
+    if (leftPage.photos.length === 0){
+      if (num === 1) return {pageIdx: leftPageIdx, photoIdx: EMPTY_SLOT};
+    } else if (num <= leftPage.photos.length){
+      return {pageIdx: leftPageIdx, photoIdx: num - 1};
+    }
   }
   if (rightPage){
-    const rightStart = 1 + (leftPage ? leftPage.photos.length : 0);
-    if (num >= rightStart && num < rightStart + rightPage.photos.length){
+    const rightStart = 1 + (leftPage ? Math.max(1, leftPage.photos.length) : 0);
+    if (rightPage.photos.length === 0){
+      if (num === rightStart) return {pageIdx: rightPageIdx, photoIdx: EMPTY_SLOT};
+    } else if (num >= rightStart && num < rightStart + rightPage.photos.length){
       return {pageIdx: rightPageIdx, photoIdx: num - rightStart};
     }
   }
@@ -1298,6 +1349,14 @@ function findPhotoImg(pageIdx, photoIdx){
 }
 
 function handleMoveButtonClick(pageIdx, photoIdx){
+  if (photoIdx === EMPTY_SLOT){
+    // An empty page's placeholder badge: nothing to pick up there, but if
+    // something's already picked up, this is exactly where "drop it here"
+    // belongs - same as clicking that page's blank background.
+    if (moveMode) performMoveToEnd(pageIdx);
+    return;
+  }
+
   const photo = DATA.pages[pageIdx].photos[photoIdx];
   if (!photo) return;
 
