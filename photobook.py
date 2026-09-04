@@ -1336,6 +1336,14 @@ function findBadgeTarget(num){
       return {pageIdx: rightPageIdx, photoIdx: num - rightStart};
     }
   }
+
+  // Numbering on this spread is contiguous with no gaps, so a digit that
+  // didn't match anything above is past the last badge in use - still
+  // resolves somewhere sensible (append to the end of the last page) rather
+  // than doing nothing, so overshooting the count is forgiving, not a dead
+  // keypress.
+  if (rightPage) return {pageIdx: rightPageIdx, photoIdx: EMPTY_SLOT};
+  if (leftPage) return {pageIdx: leftPageIdx, photoIdx: EMPTY_SLOT};
   return null;
 }
 
