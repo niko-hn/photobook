@@ -675,10 +675,28 @@ HTML_PAGE = """<!doctype html>
     display:flex;
     align-items:center;
     justify-content:center;
+    gap:10px;
     font-size:11px;
     color:#f4ecdd99;
     letter-spacing:.1em;
   }
+
+  .spread-btn{
+    display:none;
+    width:20px;
+    height:20px;
+    padding:0;
+    background:#f4ecdd22;
+    color:#f4ecdd;
+    border:none;
+    font:700 11px/20px inherit;
+    text-align:center;
+    cursor:pointer;
+    border-radius:3px;
+  }
+  .spread-btn:hover{ background:#f4ecdd3a; }
+  .spread-btn:disabled{ opacity:.3; cursor:default; pointer-events:none; }
+  body.edit-mode .spread-btn{ display:block; }
 
   #empty{
     color:#f4ecdd;
@@ -699,7 +717,11 @@ HTML_PAGE = """<!doctype html>
   <button id="prevBtn" class="nav-btn" aria-label="Previous">&#8249;</button>
   <div id="book"></div>
   <button id="nextBtn" class="nav-btn" aria-label="Next">&#8250;</button>
-  <div id="progress"></div>
+  <div id="progress">
+    <button id="addSpreadBtn" class="spread-btn" title="Add a new spread after this one (A)">A</button>
+    <span id="progressText"></span>
+    <button id="deleteSpreadBtn" class="spread-btn" title="Delete this spread, merging its photos into the next page (D)">D</button>
+  </div>
   <div id="toast"></div>
 </div>
 
@@ -714,7 +736,9 @@ const FLIP_MS = 620;
 const bookEl = document.getElementById('book');
 const prevBtn = document.getElementById('prevBtn');
 const nextBtn = document.getElementById('nextBtn');
-const progressEl = document.getElementById('progress');
+const progressEl = document.getElementById('progressText');
+const addSpreadBtn = document.getElementById('addSpreadBtn');
+const deleteSpreadBtn = document.getElementById('deleteSpreadBtn');
 
 const PHOTO_PREFIX = '__PHOTO_PREFIX__';
 
@@ -896,6 +920,8 @@ function updateChrome(){
   prevBtn.disabled = animating || spread === 0;
   nextBtn.disabled = animating || spread === totalSpreads - 1;
   progressEl.textContent = spread === 0 ? '' : `${spread} / ${totalSpreads - 1}`;
+  addSpreadBtn.disabled = animating;
+  deleteSpreadBtn.disabled = animating || spread === 0;
 }
 
 function buildFlipOverlay(dirClass, sideClass, frontSlot, backSlot){
@@ -1310,6 +1336,52 @@ function relayoutPage(pageIdx){
   bookEl.innerHTML = fullSpreadHTML(spread);
 }
 
+// Inserts a new, empty spread right after the one on screen (spread 0, the
+// cover, counts as "before page 1" here) and jumps straight to it - no flip
+// animation, same as every other structural edit-mode action.
+function addSpreadAfterCurrent(){
+  if (animating) return;
+  const insertAt = spread * 2;
+  DATA.pages.splice(insertAt, 0, {photos: [], headline: ''}, {photos: [], headline: ''});
+  totalSpreads = 1 + Math.ceil(DATA.pages.length / 2);
+  spread += 1;
+  bookEl.innerHTML = fullSpreadHTML(spread);
+  updateChrome();
+}
+
+// Deletes the current spread's page(s) and folds whatever photos were on
+// them into the page that follows - falling back to the page before, or
+// keeping them as their own page, if there's nothing after - so this can
+// never silently lose photos, only move where they live.
+function deleteCurrentSpread(){
+  if (animating || spread === 0) return;
+  const leftPageIdx = (spread - 1) * 2;
+  const removeCount = Math.min(2, DATA.pages.length - leftPageIdx);
+  if (removeCount <= 0) return;
+
+  const removed = DATA.pages.splice(leftPageIdx, removeCount);
+  const mergedPhotos = removed.reduce((all, page) => all.concat(page.photos), []);
+
+  if (mergedPhotos.length){
+    if (leftPageIdx < DATA.pages.length){
+      DATA.pages[leftPageIdx].photos = mergedPhotos.concat(DATA.pages[leftPageIdx].photos);
+      applyLayoutToPage(leftPageIdx, false);
+    } else if (leftPageIdx > 0){
+      const prevIdx = leftPageIdx - 1;
+      DATA.pages[prevIdx].photos = DATA.pages[prevIdx].photos.concat(mergedPhotos);
+      applyLayoutToPage(prevIdx, false);
+    } else {
+      DATA.pages.push({photos: mergedPhotos, headline: ''});
+      applyLayoutToPage(DATA.pages.length - 1, false);
+    }
+  }
+
+  totalSpreads = 1 + Math.ceil(DATA.pages.length / 2);
+  spread = Math.min(spread, totalSpreads - 1);
+  bookEl.innerHTML = fullSpreadHTML(spread);
+  updateChrome();
+}
+
 // Finds which (pageIdx, photoIdx) currently shows a given badge number on
 // the spread that's on screen right now - same numbering slotAt() renders,
 // so a keypress lands on exactly the photo (or empty-page placeholder)
@@ -1469,6 +1541,8 @@ function escapeHtml(s){
 
 prevBtn.addEventListener('click', () => go(-1));
 nextBtn.addEventListener('click', () => go(1));
+addSpreadBtn.addEventListener('click', addSpreadAfterCurrent);
+deleteSpreadBtn.addEventListener('click', deleteCurrentSpread);
 
 document.addEventListener('keydown', (e) => {
   if (headlineModal.classList.contains('open')){
@@ -1500,6 +1574,14 @@ document.addEventListener('keydown', (e) => {
   if (editMode && !animating && (e.key === 'n' || e.key === 'N')){
     const pageIdx = slotAt(spread, 'right').pageIdx;
     if (pageIdx !== null){ e.preventDefault(); openHeadlineEditor(pageIdx); }
+    return;
+  }
+  if (editMode && !animating && (e.key === 'a' || e.key === 'A')){
+    addSpreadAfterCurrent();
+    return;
+  }
+  if (editMode && !animating && (e.key === 'd' || e.key === 'D')){
+    deleteCurrentSpread();
     return;
   }
   if (editMode && !animating && /^[1-9]$/.test(e.key)){

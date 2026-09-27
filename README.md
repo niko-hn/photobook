@@ -91,6 +91,15 @@ python3 ../photobook.py --open
   set, with the photos making room for it rather than it overlaying them.
   Save, Clear, Escape, or clicking outside the editor all do what they
   sound like.
+- **Adding/removing spreads** (also edit mode): A and D buttons sit at the
+  bottom center, next to the page-count readout (press A or D on the
+  keyboard instead of clicking if you prefer). A inserts a new, empty
+  spread right after the one on screen and jumps straight to it. D deletes
+  the spread on screen, folding whatever photos were on it into the start
+  of the next page (or the end of the previous page, or keeping them as
+  their own page, if there's nothing after) - so deleting a spread can
+  reshuffle where photos live but never loses one. D is disabled on the
+  cover, since there's no spread there to delete.
 
 More features to come.
 
