@@ -21,6 +21,7 @@ import os
 import random
 import shutil
 import socket
+import struct
 import sys
 import threading
 import time
@@ -84,6 +85,111 @@ def find_photos(folder: Path):
         if entry.is_file() and entry.suffix.lower() in IMAGE_EXTENSIONS:
             photos.append(entry)
     return photos
+
+
+JPEG_SOF_MARKERS = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+
+
+def _jpeg_exif_orientation(app1):
+    """EXIF orientation (1-8) from a JPEG APP1 segment's payload: None if
+    the segment isn't EXIF at all (phones often add a second APP1 for XMP,
+    which mustn't reset what the EXIF one said), 1 if it has no tag."""
+    if not app1.startswith(b"Exif\x00\x00"):
+        return None
+    tiff = app1[6:]
+    endian = {b"II": "<", b"MM": ">"}.get(tiff[:2])
+    if endian is None or len(tiff) < 8:
+        return 1
+    ifd = struct.unpack(endian + "I", tiff[4:8])[0]
+    if ifd + 2 > len(tiff):
+        return 1
+    count = struct.unpack(endian + "H", tiff[ifd:ifd + 2])[0]
+    for i in range(count):
+        entry = tiff[ifd + 2 + i * 12: ifd + 14 + i * 12]
+        if len(entry) == 12 and struct.unpack(endian + "H", entry[:2])[0] == 0x0112:
+            return struct.unpack(endian + "H", entry[8:10])[0]
+    return 1
+
+
+def _jpeg_size(f):
+    width = height = None
+    orientation = 1
+    while True:
+        byte = f.read(1)
+        if not byte:
+            break
+        if byte != b"\xff":
+            continue
+        marker = f.read(1)
+        while marker == b"\xff":  # fill bytes
+            marker = f.read(1)
+        if not marker or marker[0] in (0xD8, 0x01) or 0xD0 <= marker[0] <= 0xD7:
+            continue  # standalone markers carry no length
+        if marker[0] == 0xD9:
+            break
+        length_bytes = f.read(2)
+        if len(length_bytes) < 2:
+            break
+        length = struct.unpack(">H", length_bytes)[0]
+        if marker[0] == 0xE1:
+            orientation = _jpeg_exif_orientation(f.read(length - 2)) or orientation
+        elif marker[0] in JPEG_SOF_MARKERS:
+            height, width = struct.unpack(">xHH", f.read(5))
+            break
+        else:
+            f.seek(length - 2, os.SEEK_CUR)
+    if width and orientation in (5, 6, 7, 8):  # rotated 90/270 degrees on display
+        width, height = height, width
+    return width, height
+
+
+def image_aspect(path: Path):
+    """Width / height of an image as browsers display it (EXIF rotation
+    applied for JPEGs), read from the file header alone - or None if the
+    format isn't recognized. Standard library only, so no Pillow."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(32)
+            width = height = None
+            if head[:2] == b"\xff\xd8":
+                f.seek(2)
+                width, height = _jpeg_size(f)
+            elif head[:8] == b"\x89PNG\r\n\x1a\n":
+                width, height = struct.unpack(">II", head[16:24])
+            elif head[:4] == b"GIF8":
+                width, height = struct.unpack("<HH", head[6:10])
+            elif head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+                chunk = head[12:16]
+                if chunk == b"VP8 ":
+                    w, h = struct.unpack("<HH", head[26:30])
+                    width, height = w & 0x3FFF, h & 0x3FFF
+                elif chunk == b"VP8L":
+                    bits = struct.unpack("<I", head[21:25])[0]
+                    width, height = 1 + (bits & 0x3FFF), 1 + ((bits >> 14) & 0x3FFF)
+                elif chunk == b"VP8X":
+                    width = 1 + int.from_bytes(head[24:27], "little")
+                    height = 1 + int.from_bytes(head[27:30], "little")
+            elif head[:2] == b"BM":
+                width, height = struct.unpack("<ii", head[18:26])
+                height = abs(height)
+    except (OSError, struct.error):
+        return None
+    if not width or not height:
+        return None
+    return round(width / height, 4)
+
+
+def add_aspect_ratios(folder: Path, album: dict):
+    """Give every page photo an 'ar' (width / height) so the client can
+    fit frames to the photo's real shape instead of cropping it. Computed
+    fresh on every load rather than stored in the saved state, so it can
+    never go stale."""
+    for page in album.get("pages", []):
+        for photo in page.get("photos", []):
+            ar = image_aspect(folder / photo["src"])
+            if ar:
+                photo["ar"] = ar
+    return album
 
 
 def grid_rects(n):
@@ -212,8 +318,10 @@ def get_album(folder: Path):
     random one."""
     album = load_state(folder)
     if album is None:
-        return build_album(folder)
-    return reconcile_new_photos(folder, album)
+        album = build_album(folder)
+    else:
+        album = reconcile_new_photos(folder, album)
+    return add_aspect_ratios(folder, album)
 
 
 HTML_PAGE = """<!doctype html>
@@ -407,6 +515,23 @@ HTML_PAGE = """<!doctype html>
   .page-canvas .frame{
     position:absolute;
   }
+  /* Phone layout (single-page mode): each photo is centered in a cell,
+     its frame sized to the photo's own shape (--ar = width/height) so
+     nothing gets cropped. 16px/30px are the frame's padding. */
+  .fit-cell{
+    position:absolute;
+    container-type:size;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .page-canvas .fit-cell .frame{
+    position:relative;
+    flex:none;
+    box-sizing:content-box;
+    width:min(calc(100cqw - 16px), calc((100cqh - 30px) * var(--ar)));
+    height:calc(min(calc(100cqw - 16px), calc((100cqh - 30px) * var(--ar))) / var(--ar));
+  }
 
   /* ---- Edit mode ---- */
   body.edit-mode .page:not(.blank)::after{
@@ -439,6 +564,9 @@ HTML_PAGE = """<!doctype html>
   .relayout-btn.left{ left:14px; }
   .relayout-btn.right{ right:14px; }
   body.edit-mode .relayout-btn{ display:block; }
+  /* The phone layout is computed from the photos' shapes, so there's
+     nothing for "relayout" to change there. */
+  body.edit-mode.single-page .relayout-btn{ display:none; }
 
   .move-btn{
     display:none;
@@ -822,13 +950,24 @@ function gridRects(n){
   return rects;
 }
 
-function frameHtml(photo, num, pageIdx, photoIdx){
+// With a 'cell' (phone layout), the frame is centered in that cell and
+// sized to the photo's shape by CSS (.fit-cell); without one, the frame
+// fills the photo's stored x/y/w/h and the image is cropped to fit it.
+function frameHtml(photo, num, pageIdx, photoIdx, cell){
   const rot = photo.rot || 0;
   const pos = `left:${photo.x}%; top:${photo.y}%; width:${photo.w}%; height:${photo.h}%;`;
   const picked = moveMode && movingPhoto && movingPhoto.photo === photo;
   const numBtn = (num != null)
     ? `<button class="move-btn${picked ? ' picked' : ''}" data-page-idx="${pageIdx}" data-photo-idx="${photoIdx}" title="${picked ? 'Cancel move' : 'Move this picture'}">${num}</button>`
     : '';
+  if (cell){
+    return `<div class="fit-cell" style="left:${cell.x}%; top:${cell.y}%; width:${cell.w}%; height:${cell.h}%;">
+              <div class="frame${picked ? ' picked' : ''}" data-rot="${rot}" style="--ar:${photo.ar}; transform:rotate(${rot}deg)">
+                <img src="${photoUrl(photo.src)}" alt="">
+                ${numBtn}
+              </div>
+            </div>`;
+  }
   return `<div class="frame${picked ? ' picked' : ''}" data-rot="${rot}" style="${pos} transform:rotate(${rot}deg)">
             <img src="${photoUrl(photo.src)}" alt="">
             ${numBtn}
@@ -864,8 +1003,75 @@ function albumPageInner(page, startNum, pageIdx){
   if (page.photos.length === 0){
     return `<div class="page-canvas">${emptySlotHtml(startNum, pageIdx)}</div>`;
   }
-  const frames = page.photos.map((photo, i) => frameHtml(photo, startNum + i, pageIdx, i)).join('');
+  const cells = singlePage ? phoneCells(page) : null;
+  const frames = page.photos.map((photo, i) => frameHtml(photo, startNum + i, pageIdx, i, cells && cells[i])).join('');
   return `<div class="page-canvas">${frames}</div>`;
+}
+
+// ---- Phone layout: the stored layouts are designed for a two-page
+// spread, and on a tall, narrow phone page they turn landscape photos into
+// cropped strips. In single-page mode a page's arrangement is instead
+// chosen from the photos' actual shapes (photo.ar, width / height): try
+// rows, columns and the mixed 3-photo arrangements, and keep the one that
+// shows the photos largest and most evenly sized. Deterministic, so a page
+// looks the same every time it's drawn. ----
+
+const PHONE_GAP = 0.035;                       // between cells, as a fraction of page height
+const PHONE_SPLITS = [0.38, 0.44, 0.5, 0.56, 0.62];
+
+// Area a photo of aspect 'ar' covers when fitted, uncropped, into a cell.
+function fittedArea(cellW, cellH, ar){
+  const w = Math.min(cellW, cellH * ar);
+  return w * (w / ar);
+}
+
+// Candidate arrangements for n photos on a canvas 'aspect' wide and 1
+// tall, each a list of {x, y, w, h} cells in reading order.
+function phoneCandidates(n, aspect){
+  const g = PHONE_GAP, C = aspect, out = [];
+  const R = (x, y, w, h) => ({x, y, w, h});
+  if (n === 1) out.push([R(0, 0, C, 1)]);
+  if (n === 2){
+    for (const s of PHONE_SPLITS){
+      const a = (1 - g) * s, b = (C - g) * s;
+      out.push([R(0, 0, C, a), R(0, a + g, C, 1 - a - g)]);   // stacked
+      out.push([R(0, 0, b, 1), R(b + g, 0, C - b - g, 1)]);   // side by side
+    }
+  }
+  if (n === 3){
+    const h3 = (1 - 2 * g) / 3, w3 = (C - 2 * g) / 3;
+    out.push([R(0, 0, C, h3), R(0, h3 + g, C, h3), R(0, 2 * (h3 + g), C, h3)]);
+    out.push([R(0, 0, w3, 1), R(w3 + g, 0, w3, 1), R(2 * (w3 + g), 0, w3, 1)]);
+    const halfW = (C - g) / 2, halfH = (1 - g) / 2;
+    for (const s of PHONE_SPLITS){
+      const a = (1 - g) * s, b = (C - g) * s;
+      out.push([R(0, 0, C, a), R(0, a + g, halfW, 1 - a - g), R(halfW + g, a + g, halfW, 1 - a - g)]);
+      out.push([R(0, 0, halfW, a), R(halfW + g, 0, halfW, a), R(0, a + g, C, 1 - a - g)]);
+      out.push([R(0, 0, b, 1), R(b + g, 0, C - b - g, halfH), R(b + g, halfH + g, C - b - g, halfH)]);
+      out.push([R(0, 0, b, halfH), R(0, halfH + g, b, halfH), R(b + g, 0, C - b - g, 1)]);
+    }
+  }
+  return out;
+}
+
+// Cells (in % of the page canvas) for each of a page's photos, or null to
+// fall back to the stored layout (more than 3 photos, or a photo whose
+// shape isn't known).
+function phoneCells(page){
+  const ars = page.photos.map(p => p.ar);
+  if (!ars.length || ars.length > 3 || ars.some(ar => !ar)) return null;
+  // Rough width/height of a single page's photo area, which a headline
+  // makes a little shorter. Only steers the choice - the frames themselves
+  // are fitted to the real cell size by CSS.
+  const aspect = page.headline ? 0.72 : 0.64;
+  let best = null, bestScore = -1;
+  for (const cells of phoneCandidates(ars.length, aspect)){
+    const areas = cells.map((c, i) => fittedArea(c.w, c.h, ars[i]));
+    const total = areas.reduce((a, b) => a + b, 0);
+    const score = total * Math.pow(Math.min(...areas) / Math.max(...areas), 0.25);
+    if (score > bestScore){ bestScore = score; best = cells; }
+  }
+  return best.map(c => ({x: c.x / aspect * 100, y: c.y * 100, w: c.w / aspect * 100, h: c.h * 100}));
 }
 
 // A visible "drop it here" target for a page with no photos: a dashed box
@@ -1610,7 +1816,7 @@ document.addEventListener('keydown', (e) => {
     if (pageIdx !== null) relayoutPage(pageIdx);
     return;
   }
-  if (editMode && !animating && (e.key === 'r' || e.key === 'R')){
+  if (editMode && !animating && !singlePage && (e.key === 'r' || e.key === 'R')){
     const pageIdx = slotAt(spread, 'right').pageIdx;
     if (pageIdx !== null) relayoutPage(pageIdx);
     return;
@@ -1871,6 +2077,7 @@ class AlbumHandler(BaseHTTPRequestHandler):
         except OSError as e:
             self._send_json({"ok": False, "error": str(e)}, status=500)
             return
+        album = add_aspect_ratios(self.folder, album)
 
         AlbumHandler.album = album
         AlbumHandler.photo_index = {

@@ -43,8 +43,11 @@ python3 ../photobook.py --open
   touch swipe.
 - Two pages shown at a time (a spread), like an open book. On portrait
   screens (a phone held upright) it shows one page at a time instead, and
-  switches back and forth on rotation without losing your place. Edit mode
-  works the same there; L and M just have no left page to act on.
+  switches back and forth on rotation without losing your place. Pages
+  there are arranged to suit their photos' shapes (landscape photos stack,
+  portrait ones sit side by side) and photos are never cropped. Edit mode
+  works the same there, except L/R (re-arranging a page, which only applies
+  to the two-page layout) and M, which has no left page to act on.
 - Each page holds 1-3 photos in one of several varying layouts, framed like
   real photos.
 - Click a photo to zoom it to a full, framed view on black; click again (or
