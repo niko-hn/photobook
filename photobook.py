@@ -508,7 +508,24 @@ HTML_PAGE = """<!doctype html>
     color:var(--ink-soft);
     font-variant-numeric:tabular-nums;
   }
-  #progressText.to-index{ cursor:pointer; padding:5px 10px; } /* a bigger tap target */
+  /* The page counter, with a "contents" icon when there's an index to go
+     back to - the whole thing is the (generously sized) tap target. */
+  .index-btn{
+    display:inline-flex;
+    align-items:center;
+    gap:7px;
+    padding:5px 10px;
+    background:none;
+    border:none;
+    color:inherit;
+    font:inherit;
+    letter-spacing:inherit;
+    pointer-events:none;
+  }
+  .index-btn svg{ display:none; width:15px; height:15px; }
+  .index-btn.to-index{ pointer-events:auto; cursor:pointer; }
+  .index-btn.to-index svg{ display:block; }
+  .index-btn.to-index:hover{ color:#f4ecdd; }
 
   /* ---- Photo frames ---- */
   .frame{
@@ -918,7 +935,10 @@ HTML_PAGE = """<!doctype html>
   <button id="nextBtn" class="nav-btn" aria-label="Next">&#8250;</button>
   <div id="progress">
     <button id="addSpreadBtn" class="spread-btn" title="Add a new spread after this one (A)">A</button>
-    <span id="progressText"></span>
+    <button id="indexBtn" class="index-btn" title="Contents" aria-label="Contents">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/></svg>
+      <span id="progressText"></span>
+    </button>
     <button id="deleteSpreadBtn" class="spread-btn" title="Delete this spread, merging its photos into the next page (D)">D</button>
   </div>
   <div id="toast"></div>
@@ -957,6 +977,7 @@ const bookEl = document.getElementById('book');
 const prevBtn = document.getElementById('prevBtn');
 const nextBtn = document.getElementById('nextBtn');
 const progressEl = document.getElementById('progressText');
+const indexBtn = document.getElementById('indexBtn');
 const addSpreadBtn = document.getElementById('addSpreadBtn');
 const deleteSpreadBtn = document.getElementById('deleteSpreadBtn');
 
@@ -1255,7 +1276,7 @@ function updateChrome(){
   nextBtn.disabled = animating || spread === totalSpreads - 1;
   // Counts album spreads/pages only - the cover and index page show none.
   progressEl.textContent = spread - offset < 1 ? '' : `${spread - offset} / ${totalSpreads - 1 - offset}`;
-  progressEl.classList.toggle('to-index', hasIndex());
+  indexBtn.classList.toggle('to-index', hasIndex() && spread !== indexSpread());
   addSpreadBtn.disabled = animating;
   deleteSpreadBtn.disabled = animating || firstPageOf(spread) < 0;
 }
@@ -2157,8 +2178,8 @@ function escapeHtml(s){
   return d.innerHTML;
 }
 
-// The page counter doubles as a way back to the index.
-progressEl.addEventListener('click', () => {
+// The page counter (with its contents icon) is the way back to the index.
+indexBtn.addEventListener('click', () => {
   if (animating || !hasIndex() || spread === indexSpread()) return;
   spread = indexSpread();
   renderSpreadInstant();
