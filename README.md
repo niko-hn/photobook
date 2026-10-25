@@ -60,7 +60,8 @@ python3 ../photobook.py --open
   page and spread boundaries freely - the book's own page turns along
   behind the scenes, so it's showing the right spread whenever you zoom
   back out.
-  On touch screens, swipe left/right for the next/previous photo, pinch to
+  On touch screens, swipe left/right for the next/previous photo (it follows
+  your finger and slides across, like a photo gallery), pinch to
   zoom (drag to look around while zoomed), and double-tap to zoom in or
   out; a single tap zooms back out, then closes. On a portrait phone the
   photo fills the screen edge to edge instead of sitting in a polaroid frame.

@@ -487,12 +487,12 @@ HTML_PAGE = """<!doctype html>
     z-index:100;
   }
   #lightbox{ touch-action:none; } /* pinch/pan handled in JS, not by the browser */
-  body.single-page #lightboxFrame{ box-shadow:none; }
+  body.single-page .lb-frame{ box-shadow:none; }
   #lightbox.open{
     opacity:1;
     pointer-events:auto;
   }
-  #lightboxFrame{
+  .lb-frame{
     position:fixed;
     background:#fff;
     box-shadow:0 30px 80px -12px #000000cc;
@@ -505,7 +505,7 @@ HTML_PAGE = """<!doctype html>
       padding .38s cubic-bezier(.3,.7,.3,1),
       transform .38s cubic-bezier(.3,.7,.3,1);
   }
-  #lightboxFrame img{
+  .lb-frame img{
     display:block;
     width:100%;
     height:100%;
@@ -1281,6 +1281,7 @@ const lightbox = document.createElement('div');
 lightbox.id = 'lightbox';
 const lightboxFrame = document.createElement('div');
 lightboxFrame.id = 'lightboxFrame';
+lightboxFrame.className = 'lb-frame'; // styled by class, so slide ghosts (clones) look the same
 const lightboxImg = document.createElement('img');
 lightboxImg.id = 'lightboxImg';
 lightboxImg.alt = '';
@@ -1336,6 +1337,7 @@ function openLightbox(imgEl, pageIdx, photoIdx){
   lightboxSourcePadding = frameEl ? getComputedStyle(frameEl).padding : '8px 8px 22px 8px';
 
   const r = (frameEl || imgEl).getBoundingClientRect();
+  lightboxImg.onload = null; // see goToLightboxPhoto
   lightboxImg.src = imgEl.src;
 
   lightboxFrame.style.transition = 'none';
@@ -1353,13 +1355,14 @@ function openLightbox(imgEl, pageIdx, photoIdx){
   void lightboxFrame.offsetWidth; // force reflow so the next change transitions
 
   resetZoom(false);
+  preloadNeighbors();
   const onLoad = () => {
     lightboxFrame.style.transition = '';
     fitLightboxFrame();
     lightboxFrame.style.transform = 'rotate(0deg)';
   };
   if (lightboxImg.complete) onLoad();
-  else lightboxImg.onload = onLoad;
+  else lightboxImg.onload = () => { lightboxImg.onload = null; onLoad(); };
 }
 
 // Sizes the open lightbox's frame to the current photo and screen.
@@ -1376,6 +1379,8 @@ function closeLightbox(){
   if (!lightboxOpen) return;
   lightboxOpen = false;
   resetZoom(false);
+  endSlide();
+  lightboxFrame.style.transition = ''; // zoom back out to the page with the usual animation
 
   const frameEl = lightboxSourceImg ? lightboxSourceImg.closest('.frame') : null;
   const r = (frameEl || lightboxSourceImg) ? (frameEl || lightboxSourceImg).getBoundingClientRect() : null;
@@ -1406,18 +1411,84 @@ function flatPhotoList(){
   return list;
 }
 
-function shiftLightboxPhoto(delta){
-  if (lightboxPageIdx === null) return; // opened from a cover thumbnail - no sequence to walk
+// The photo 'delta' steps away from the one in the lightbox, or null at
+// either end of the album (no wraparound) or when it was opened from a
+// cover thumbnail (no sequence to walk).
+function neighborPhoto(delta){
+  if (lightboxPageIdx === null) return null;
   const flat = flatPhotoList();
   const curIdx = flat.findIndex(p => p.pageIdx === lightboxPageIdx && p.photoIdx === lightboxPhotoIdx);
-  if (curIdx === -1) return;
-  const nextIdx = curIdx + delta;
-  if (nextIdx < 0 || nextIdx >= flat.length) return; // clamp - no wraparound
-  const target = flat[nextIdx];
-  goToLightboxPhoto(target.pageIdx, target.photoIdx);
+  if (curIdx === -1) return null;
+  return flat[curIdx + delta] || null;
 }
 
-function goToLightboxPhoto(pageIdx, photoIdx){
+// Warms the browser cache with the photos either side, so a swipe can
+// slide the next one in right away instead of waiting for it to load.
+function preloadNeighbors(){
+  for (const delta of [-1, 1]){
+    const n = neighborPhoto(delta);
+    if (n) new Image().src = photoUrl(DATA.pages[n.pageIdx].photos[n.photoIdx].src);
+  }
+}
+
+// ---- Sliding between photos: the current one slides off to one side as
+// the next slides in from the other. 'fromX' is where a swipe left the
+// current photo when the finger lifted, so the slide carries on from
+// there. The outgoing photo is a throwaway clone of the frame (a "ghost"),
+// so the real frame can already take on the next photo. ----
+
+const SLIDE_MS = 300;
+let sliding = false;
+let slideTimer = null;
+
+function setFrameX(x, ms){
+  lightboxFrame.style.transition = ms ? `transform ${ms}ms ease-out` : 'none';
+  lightboxFrame.style.transform = `translateX(${x}px)`;
+}
+
+function endSlide(){
+  clearTimeout(slideTimer);
+  lightbox.querySelectorAll('.lb-ghost').forEach(g => g.remove());
+  lightboxFrame.style.visibility = '';
+  lightboxFrame.style.transition = '';
+  lightboxFrame.style.transform = 'rotate(0deg)';
+  sliding = false;
+}
+
+function shiftLightboxPhoto(delta, fromX = 0){
+  const target = neighborPhoto(delta);
+  if (!target || sliding){
+    if (fromX) setFrameX(0, 200); // nowhere to go: spring back
+    return;
+  }
+  sliding = true;
+  // Both photos move the same distance, side by side like a carousel
+  // with a small gap, rather than each crossing the full screen.
+  const step = window.innerWidth + 16;
+
+  const ghost = lightboxFrame.cloneNode(true);
+  ghost.removeAttribute('id');
+  ghost.querySelector('img').removeAttribute('id');
+  ghost.classList.add('lb-ghost');
+  ghost.style.transition = 'none';
+  ghost.style.transform = `translateX(${fromX}px)`;
+  lightbox.appendChild(ghost);
+
+  lightboxFrame.style.visibility = 'hidden';
+  lightboxFrame.style.transition = 'none';
+  goToLightboxPhoto(target.pageIdx, target.photoIdx, () => {
+    if (!sliding) return; // closed meanwhile
+    setFrameX(fromX + delta * step, 0);
+    lightboxFrame.style.visibility = '';
+    void lightboxFrame.offsetWidth; // start from off-screen, not from 0
+    setFrameX(0, SLIDE_MS);
+    ghost.style.transition = `transform ${SLIDE_MS}ms ease-out`;
+    ghost.style.transform = `translateX(${-delta * step}px)`;
+    slideTimer = setTimeout(() => { endSlide(); preloadNeighbors(); }, SLIDE_MS + 30);
+  });
+}
+
+function goToLightboxPhoto(pageIdx, photoIdx, onReady){
   const photo = DATA.pages[pageIdx] && DATA.pages[pageIdx].photos[photoIdx];
   if (!photo) return;
 
@@ -1441,9 +1512,13 @@ function goToLightboxPhoto(pageIdx, photoIdx){
   lightboxSourcePadding = frameEl ? getComputedStyle(frameEl).padding : lightboxSourcePadding;
 
   resetZoom(false);
+  // Clear any earlier onload first: a cached image can be 'complete' right
+  // away yet still fire 'load' later, which would re-run a stale callback.
+  lightboxImg.onload = null;
   lightboxImg.src = photoUrl(photo.src);
-  if (lightboxImg.complete) fitLightboxFrame();
-  else lightboxImg.onload = fitLightboxFrame;
+  const ready = () => { lightboxImg.onload = null; fitLightboxFrame(); if (onReady) onReady(); };
+  if (lightboxImg.complete) ready();
+  else lightboxImg.onload = ready;
 }
 
 // ---- Lightbox touch gestures: pinch to zoom (and drag to pan while
@@ -1501,14 +1576,37 @@ function zoomAround(start, from, to, scale){
 function touchDistance(t){ return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY); }
 function touchMidpoint(t){ return {x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2}; }
 
+// One-finger horizontal drag while not zoomed: the photo follows the
+// finger, and on release either slides on to the next/previous photo or
+// springs back.
+let swipe = null;
+
+function finishSwipe(){
+  const s = swipe;
+  swipe = null;
+  if (!s || !s.horizontal) return;
+  const dist = Math.abs(s.dx), speed = dist / Math.max(1, Date.now() - s.t);
+  const far = dist > Math.min(90, window.innerWidth * 0.22) || (dist > 30 && speed > 0.4);
+  if (far) shiftLightboxPhoto(s.dx < 0 ? 1 : -1, s.dx);
+  else setFrameX(0, 200);
+}
+
 lightbox.addEventListener('touchstart', (e) => {
   if (e.touches.length === 1){
     lightboxMultiTouch = false;
     lightboxTouchMoved = false;
+    // A new touch mid-slide jumps to the end of that slide, so quick
+    // swipes in a row each count.
+    if (sliding){ endSlide(); preloadNeighbors(); }
+    if (zoom.scale === 1){
+      swipe = {x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now(), dx: 0, horizontal: null};
+    }
   }
   if (e.touches.length >= 2){
     e.preventDefault();
     lightboxMultiTouch = true;
+    if (swipe && swipe.horizontal) setFrameX(0, 150); // a second finger turns it into a pinch
+    swipe = null;
     pan = null;
     pinch = {dist: touchDistance(e.touches), mid: touchMidpoint(e.touches), start: {...zoom}};
   } else if (zoom.scale > 1){
@@ -1529,6 +1627,17 @@ lightbox.addEventListener('touchmove', (e) => {
     zoom = {...pan.start, x: pan.start.x + dx, y: pan.start.y + dy};
     clampPan();
     applyZoom(false);
+  } else if (swipe){
+    const dx = e.touches[0].clientX - swipe.x, dy = e.touches[0].clientY - swipe.y;
+    if (swipe.horizontal === null && Math.abs(dx) + Math.abs(dy) > 8){
+      swipe.horizontal = Math.abs(dx) > Math.abs(dy);
+    }
+    if (swipe.horizontal){
+      lightboxTouchMoved = true;
+      // Rubber-band at either end of the album.
+      swipe.dx = neighborPhoto(dx < 0 ? 1 : -1) ? dx : dx * 0.3;
+      setFrameX(swipe.dx, 0);
+    }
   }
 }, {passive: false});
 
@@ -1539,7 +1648,15 @@ lightbox.addEventListener('touchend', (e) => {
     // Lifting one finger of a pinch carries on as a pan with the other.
     else if (e.touches.length === 1) pan = {x: e.touches[0].clientX, y: e.touches[0].clientY, start: {...zoom}};
   }
-  if (e.touches.length === 0) pan = null;
+  if (e.touches.length === 0){
+    pan = null;
+    finishSwipe();
+  }
+});
+
+lightbox.addEventListener('touchcancel', () => {
+  if (swipe && swipe.horizontal) setFrameX(0, 200);
+  swipe = pinch = pan = null;
 });
 
 // A single tap closes (or, when zoomed in, zooms back out first); a double
@@ -2010,11 +2127,9 @@ document.addEventListener('touchend', (e) => {
   const dx = e.changedTouches[0].clientX - touchStartX;
   const dy = e.changedTouches[0].clientY - touchStartY;
   touchStartX = null;
-  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5){
-    if (!lightboxOpen) go(dx < 0 ? 1 : -1);
-    // In the lightbox a swipe steps through the photos - unless it was
-    // really a pinch, or a drag around a zoomed-in photo.
-    else if (!lightboxMultiTouch && zoom.scale === 1) shiftLightboxPhoto(dx < 0 ? 1 : -1);
+  // (In the lightbox, swipes are handled by its own touch handlers.)
+  if (!lightboxOpen && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5){
+    go(dx < 0 ? 1 : -1);
   }
 }, {passive:true});
 
