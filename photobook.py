@@ -295,6 +295,17 @@ HTML_PAGE = """<!doctype html>
     z-index:5;
   }
 
+  /* ---- Single-page mode (portrait screens): one page at a time, as a
+     centered 2:3 page instead of stretching to the window's full height ---- */
+  body.single-page #book{
+    width:min(calc(100vw - 60px), calc((100vh - 35px) * 2 / 3));
+    height:min(calc(100vh - 35px), calc((100vw - 60px) * 3 / 2));
+    width:min(calc(100vw - 60px), calc((100dvh - 35px) * 2 / 3));
+    height:min(calc(100dvh - 35px), calc((100vw - 60px) * 3 / 2));
+    margin:auto;
+  }
+  body.single-page #book::after{ display:none; }
+
   /* ---- Cover ---- */
   .cover-wrap{
     display:flex;
@@ -320,8 +331,8 @@ HTML_PAGE = """<!doctype html>
   }
   .cover-thumbs{
     position:relative;
-    width:100%;
-    max-width:340px;
+    width:320px; /* the thumbs' fixed positions span ~320px; this centers them */
+    max-width:100%;
     height:170px;
   }
   .cover-thumbs .frame{
@@ -617,6 +628,7 @@ HTML_PAGE = """<!doctype html>
   }
   .flip-overlay.right{ left:50%; transform-origin:left center; }
   .flip-overlay.left{ left:0; transform-origin:right center; }
+  .flip-overlay.single{ left:0; width:100%; transform-origin:left center; }
   .flip-face{
     position:absolute;
     inset:0;
@@ -727,9 +739,21 @@ HTML_PAGE = """<!doctype html>
 
 <script>
 let DATA = null;
-let spread = 0; // 0 = cover, 1..N = page pairs
+let spread = 0; // 0 = cover, 1..N = page pairs (single pages in single-page mode)
 let totalSpreads = 1;
 let animating = false;
+
+// Portrait screens (phones held upright) show one page at a time instead
+// of a squashed two-page spread. Everything that maps between spreads and
+// pages goes through the helpers below, so both modes share one code path.
+const singlePageQuery = window.matchMedia('(max-aspect-ratio: 4/5)');
+let singlePage = singlePageQuery.matches;
+let modeChangePending = false;
+
+function pagesPerSpread(){ return singlePage ? 1 : 2; }
+function firstPageOf(spreadIdx){ return (spreadIdx - 1) * pagesPerSpread(); }
+function spreadOfPage(pageIdx){ return Math.floor(pageIdx / pagesPerSpread()) + 1; }
+function countSpreads(){ return 1 + Math.ceil(DATA.pages.length / pagesPerSpread()); }
 
 const FLIP_MS = 620;
 
@@ -861,18 +885,20 @@ function emptySlotHtml(num, pageIdx){
 // Photo numbering is local to the spread: the left page starts at 1, and
 // the right page continues on from wherever the left page left off - so
 // every visible badge is a small, unambiguous number a keypress can target.
+// In single-page mode the one visible page is the 'right' slot and the
+// 'left' slot is always empty.
 function slotAt(spreadIdx, side){
-  if (spreadIdx === 0){
+  if (spreadIdx === 0 || (singlePage && side === 'left')){
     if (side === 'left') return {cls: 'blank', inner: '', pageIdx: null};
     return {cls: '', inner: coverInner(), pageIdx: null};
   }
-  const leftPageIdx = (spreadIdx - 1) * 2;
-  const pageIdx = side === 'left' ? leftPageIdx : leftPageIdx + 1;
+  const leftPageIdx = firstPageOf(spreadIdx);
+  const pageIdx = (side === 'left' || singlePage) ? leftPageIdx : leftPageIdx + 1;
   const page = DATA.pages[pageIdx];
   if (!page) return {cls: 'blank', inner: '', pageIdx: null};
 
   let startNum = 1;
-  if (side === 'right'){
+  if (side === 'right' && !singlePage){
     const leftPage = DATA.pages[leftPageIdx];
     // An empty page still claims one badge number (its "drop here"
     // placeholder), so every page - even an empty one - has a number a
@@ -906,6 +932,7 @@ function pageHtml(slot, side){
 }
 
 function fullSpreadHTML(spreadIdx){
+  if (singlePage) return pageHtml(slotAt(spreadIdx, 'right'), 'right');
   const l = slotAt(spreadIdx, 'left');
   const r = slotAt(spreadIdx, 'right');
   return pageHtml(l, 'left') + pageHtml(r, 'right');
@@ -943,8 +970,9 @@ function animateShade(overlay){
 }
 
 function finishFlip(){
-  bookEl.innerHTML = fullSpreadHTML(spread); // replaces the overlay too, now that it's done
   animating = false;
+  if (modeChangePending){ applyPageMode(); return; }
+  bookEl.innerHTML = fullSpreadHTML(spread); // replaces the overlay too, now that it's done
   updateChrome();
 }
 
@@ -958,9 +986,28 @@ function afterPaint(callback){
   requestAnimationFrame(() => requestAnimationFrame(callback));
 }
 
+// Single-page flips turn the whole page around its left edge: forward
+// turns the current page away to uncover the next one, backward brings
+// the previous page back over the current one.
+function flipSingle(nextSpread, forward){
+  const turning = slotAt(forward ? spread : nextSpread, 'right');
+  const under = slotAt(forward ? nextSpread : spread, 'right');
+
+  bookEl.innerHTML = pageHtml(under, 'right');
+  const overlay = buildFlipOverlay('dir-fwd', 'single', turning, {cls: 'blank', inner: ''});
+  bookEl.appendChild(overlay);
+
+  const frames = [{transform: 'rotateY(0deg)'}, {transform: 'rotateY(-180deg)'}];
+  const anim = overlay.animate(forward ? frames : frames.reverse(),
+    {duration: FLIP_MS, easing: 'cubic-bezier(.45,.05,.35,1)', fill: 'forwards'});
+  animateShade(overlay);
+  anim.onfinish = () => { spread = nextSpread; afterPaint(finishFlip); };
+}
+
 function flipForward(nextSpread){
   animating = true;
   updateChrome();
+  if (singlePage){ flipSingle(nextSpread, true); return; }
 
   const frontSlot = slotAt(spread, 'right');         // page currently showing, about to turn
   const backSlot = slotAt(nextSpread, 'left');        // revealed as its back, once fully turned
@@ -983,6 +1030,7 @@ function flipForward(nextSpread){
 function flipBackward(nextSpread){
   animating = true;
   updateChrome();
+  if (singlePage){ flipSingle(nextSpread, false); return; }
 
   const frontSlot = slotAt(spread, 'left');          // page currently showing, about to turn back
   const backSlot = slotAt(nextSpread, 'right');       // revealed as its back, once fully turned
@@ -1149,7 +1197,7 @@ function goToLightboxPhoto(pageIdx, photoIdx){
   // The book underneath is hidden behind the lightbox's opaque backdrop,
   // but its page state still needs to track along - otherwise closing the
   // lightbox would land back on whatever spread was showing before.
-  const targetSpread = Math.floor(pageIdx / 2) + 1;
+  const targetSpread = spreadOfPage(pageIdx);
   if (targetSpread !== spread){
     spread = targetSpread;
     bookEl.innerHTML = fullSpreadHTML(spread);
@@ -1341,9 +1389,10 @@ function relayoutPage(pageIdx){
 // animation, same as every other structural edit-mode action.
 function addSpreadAfterCurrent(){
   if (animating) return;
-  const insertAt = spread * 2;
-  DATA.pages.splice(insertAt, 0, {photos: [], headline: ''}, {photos: [], headline: ''});
-  totalSpreads = 1 + Math.ceil(DATA.pages.length / 2);
+  const insertAt = spread * pagesPerSpread();
+  const newPages = Array.from({length: pagesPerSpread()}, () => ({photos: [], headline: ''}));
+  DATA.pages.splice(insertAt, 0, ...newPages);
+  totalSpreads = countSpreads();
   spread += 1;
   bookEl.innerHTML = fullSpreadHTML(spread);
   updateChrome();
@@ -1355,8 +1404,8 @@ function addSpreadAfterCurrent(){
 // never silently lose photos, only move where they live.
 function deleteCurrentSpread(){
   if (animating || spread === 0) return;
-  const leftPageIdx = (spread - 1) * 2;
-  const removeCount = Math.min(2, DATA.pages.length - leftPageIdx);
+  const leftPageIdx = firstPageOf(spread);
+  const removeCount = Math.min(pagesPerSpread(), DATA.pages.length - leftPageIdx);
   if (removeCount <= 0) return;
 
   const removed = DATA.pages.splice(leftPageIdx, removeCount);
@@ -1376,7 +1425,7 @@ function deleteCurrentSpread(){
     }
   }
 
-  totalSpreads = 1 + Math.ceil(DATA.pages.length / 2);
+  totalSpreads = countSpreads();
   spread = Math.min(spread, totalSpreads - 1);
   bookEl.innerHTML = fullSpreadHTML(spread);
   updateChrome();
@@ -1388,10 +1437,10 @@ function deleteCurrentSpread(){
 // whose badge it matches.
 function findBadgeTarget(num){
   if (spread === 0 || num < 1) return null;
-  const leftPageIdx = (spread - 1) * 2;
+  const leftPageIdx = firstPageOf(spread);
   const rightPageIdx = leftPageIdx + 1;
   const leftPage = DATA.pages[leftPageIdx];
-  const rightPage = DATA.pages[rightPageIdx];
+  const rightPage = singlePage ? undefined : DATA.pages[rightPageIdx];
 
   if (leftPage){
     if (leftPage.photos.length === 0){
@@ -1630,8 +1679,35 @@ fetch('__API_URL__').then(r => r.json()).then(data => {
     nextBtn.style.display = 'none';
     return;
   }
-  totalSpreads = 1 + Math.ceil(DATA.pages.length / 2);
+  applyPageMode();
+});
+
+// Switch between spreads and single pages (e.g. on rotating a phone),
+// staying on the same page: the first page showing before the switch is
+// the one showing after it.
+function applyPageMode(){
+  modeChangePending = false;
+  const wasSingle = document.body.classList.contains('single-page');
+  if (wasSingle !== singlePage && spread > 0){
+    const pageIdx = (spread - 1) * (wasSingle ? 1 : 2);
+    spread = spreadOfPage(pageIdx);
+  }
+  document.body.classList.toggle('single-page', singlePage);
+  totalSpreads = countSpreads();
+  spread = Math.min(spread, totalSpreads - 1);
   renderSpreadInstant();
+  // An open lightbox zooms back out to its photo's frame, which was just
+  // re-rendered - point it at the new element.
+  if (lightboxOpen && lightboxPageIdx !== null){
+    lightboxSourceImg = findPhotoImg(lightboxPageIdx, lightboxPhotoIdx) || lightboxSourceImg;
+  }
+}
+
+singlePageQuery.addEventListener('change', (e) => {
+  singlePage = e.matches;
+  if (!DATA || !DATA.count) return;
+  if (animating) modeChangePending = true; // finishFlip applies it
+  else applyPageMode();
 });
 </script>
 </body>
