@@ -104,6 +104,11 @@ python3 ../photobook.py --open
   set, with the photos making room for it rather than it overlaying them.
   Save, Clear, Escape, or clicking outside the editor all do what they
   sound like.
+- **Index**: once any page has a caption, the album gets a contents page
+  listing every caption with its page number - on the cover spread's left
+  page, or as its own page right after the cover on a portrait phone. Tap
+  an entry to jump straight to that page; tap the page counter at the
+  bottom to get back to the index.
 - **Adding/removing spreads** (also edit mode): A and D buttons sit at the
   bottom center, next to the page-count readout (press A or D on the
   keyboard instead of clicking if you prefer). A inserts a new, empty

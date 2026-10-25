@@ -459,6 +459,57 @@ HTML_PAGE = """<!doctype html>
     letter-spacing:.08em;
   }
 
+  /* ---- Index (captions as a table of contents) ---- */
+  .index-wrap{
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+    width:100%;
+    max-width:520px;
+    margin:auto;
+  }
+  .index-title{
+    text-align:center;
+    font-size:13px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--ink-soft);
+    margin-bottom:18px;
+  }
+  .index-list{
+    list-style:none;
+    margin:0;
+    padding:0;
+    overflow-y:auto;
+  }
+  .index-entry{
+    display:flex;
+    align-items:baseline;
+    gap:8px;
+    width:100%;
+    padding:7px 6px;
+    background:none;
+    border:none;
+    border-radius:4px;
+    font:inherit;
+    font-size:clamp(14px, 1.5vw, 18px);
+    color:var(--ink);
+    text-align:left;
+    cursor:pointer;
+  }
+  .index-entry:hover{ background:#0000000a; }
+  .index-dots{
+    flex:1 1 12px;
+    border-bottom:1px dotted #00000045;
+    transform:translateY(-4px);
+  }
+  .index-num{
+    flex:none;
+    color:var(--ink-soft);
+    font-variant-numeric:tabular-nums;
+  }
+  #progressText.to-index{ cursor:pointer; padding:5px 10px; } /* a bigger tap target */
+
   /* ---- Photo frames ---- */
   .frame{
     background:#fff;
@@ -885,10 +936,19 @@ const singlePageQuery = window.matchMedia('(max-aspect-ratio: 4/5)');
 let singlePage = singlePageQuery.matches;
 let modeChangePending = false;
 
+// An album with captions gets an index (table of contents) of them: on the
+// cover spread's otherwise blank left page in spreads - no extra spread -
+// and as its own page right after the cover in single-page mode, which
+// shifts every later page along by one (indexOffset).
+function hasIndex(){ return DATA.pages.some(p => p.headline); }
+function indexOffset(){ return singlePage && hasIndex() ? 1 : 0; }
+function indexSpread(){ return singlePage ? 1 : 0; }
+
 function pagesPerSpread(){ return singlePage ? 1 : 2; }
-function firstPageOf(spreadIdx){ return (spreadIdx - 1) * pagesPerSpread(); }
-function spreadOfPage(pageIdx){ return Math.floor(pageIdx / pagesPerSpread()) + 1; }
-function countSpreads(){ return 1 + Math.ceil(DATA.pages.length / pagesPerSpread()); }
+// Negative for the cover and the index page - no album page there.
+function firstPageOf(spreadIdx){ return (spreadIdx - 1 - indexOffset()) * pagesPerSpread(); }
+function spreadOfPage(pageIdx){ return Math.floor(pageIdx / pagesPerSpread()) + 1 + indexOffset(); }
+function countSpreads(){ return 1 + indexOffset() + Math.ceil(DATA.pages.length / pagesPerSpread()); }
 
 const FLIP_MS = 620;
 
@@ -1104,9 +1164,11 @@ function emptySlotHtml(num, pageIdx){
 // In single-page mode the one visible page is the 'right' slot and the
 // 'left' slot is always empty.
 function slotAt(spreadIdx, side){
-  if (spreadIdx === 0 || (singlePage && side === 'left')){
-    if (side === 'left') return {cls: 'blank', inner: '', pageIdx: null};
-    return {cls: '', inner: coverInner(), pageIdx: null};
+  const blank = {cls: 'blank', inner: '', pageIdx: null};
+  if (singlePage && side === 'left') return blank;
+  if (spreadIdx === 0 && side === 'right') return {cls: '', inner: coverInner(), pageIdx: null};
+  if (spreadIdx === indexSpread() && (singlePage || side === 'left')){
+    return hasIndex() ? {cls: '', inner: indexInner(), pageIdx: null} : blank;
   }
   const leftPageIdx = firstPageOf(spreadIdx);
   const pageIdx = (side === 'left' || singlePage) ? leftPageIdx : leftPageIdx + 1;
@@ -1129,6 +1191,33 @@ function slotAt(spreadIdx, side){
     : '';
   const inner = headlineHtml + albumPageInner(page, startNum, pageIdx);
   return {cls: '', inner, pageIdx};
+}
+
+// The index: every captioned page, with its page number. Each entry is a
+// button that jumps straight to that page (see jumpToPage).
+function indexInner(){
+  const entries = DATA.pages.map((page, pageIdx) => page.headline
+    ? `<li><button class="index-entry" data-page-idx="${pageIdx}">
+         <span class="index-caption">${escapeHtml(page.headline)}</span>
+         <span class="index-dots"></span>
+         <span class="index-num">${pageIdx + 1}</span>
+       </button></li>`
+    : '').join('');
+  return `<div class="index-wrap">
+            <div class="index-title">Contents</div>
+            <ol class="index-list">${entries}</ol>
+          </div>`;
+}
+
+// Quick navigation (index entries): straight to a page, with a short fade
+// instead of flipping through everything in between.
+function jumpToPage(pageIdx){
+  if (animating || !DATA.pages[pageIdx]) return;
+  spread = spreadOfPage(pageIdx);
+  renderSpreadInstant();
+  bookEl.classList.remove('fade-enter');
+  void bookEl.offsetWidth; // restart the animation
+  bookEl.classList.add('fade-enter');
 }
 
 function pageHtml(slot, side){
@@ -1160,11 +1249,14 @@ function renderSpreadInstant(){
 }
 
 function updateChrome(){
+  const offset = indexOffset();
   prevBtn.disabled = animating || spread === 0;
   nextBtn.disabled = animating || spread === totalSpreads - 1;
-  progressEl.textContent = spread === 0 ? '' : `${spread} / ${totalSpreads - 1}`;
+  // Counts album spreads/pages only - the cover and index page show none.
+  progressEl.textContent = spread - offset < 1 ? '' : `${spread - offset} / ${totalSpreads - 1 - offset}`;
+  progressEl.classList.toggle('to-index', hasIndex());
   addSpreadBtn.disabled = animating;
-  deleteSpreadBtn.disabled = animating || spread === 0;
+  deleteSpreadBtn.disabled = animating || firstPageOf(spread) < 0;
 }
 
 function buildFlipOverlay(dirClass, sideClass, frontSlot, backSlot){
@@ -1759,8 +1851,13 @@ function saveHeadlineEditor(){
   if (headlineEditingPageIdx === null) return;
   const page = DATA.pages[headlineEditingPageIdx];
   if (page) page.headline = headlineInput.value.trim();
+  const pageIdx = headlineEditingPageIdx;
   closeHeadlineEditor();
-  bookEl.innerHTML = fullSpreadHTML(spread);
+  // The first caption added (or the last one cleared) adds or removes the
+  // index, which in single-page mode moves every page along by one.
+  spread = spreadOfPage(pageIdx);
+  totalSpreads = countSpreads();
+  renderSpreadInstant();
 }
 
 document.getElementById('headlineSave').addEventListener('click', saveHeadlineEditor);
@@ -1854,11 +1951,12 @@ function relayoutPage(pageIdx){
 // animation, same as every other structural edit-mode action.
 function addSpreadAfterCurrent(){
   if (animating) return;
-  const insertAt = spread * pagesPerSpread();
+  // After the current spread's pages; from the cover or index, page 1.
+  const insertAt = Math.max(0, firstPageOf(spread + 1));
   const newPages = Array.from({length: pagesPerSpread()}, () => ({photos: [], headline: ''}));
   DATA.pages.splice(insertAt, 0, ...newPages);
   totalSpreads = countSpreads();
-  spread += 1;
+  spread = spreadOfPage(insertAt);
   bookEl.innerHTML = fullSpreadHTML(spread);
   updateChrome();
 }
@@ -1868,8 +1966,8 @@ function addSpreadAfterCurrent(){
 // keeping them as their own page, if there's nothing after - so this can
 // never silently lose photos, only move where they live.
 function deleteCurrentSpread(){
-  if (animating || spread === 0) return;
   const leftPageIdx = firstPageOf(spread);
+  if (animating || leftPageIdx < 0) return; // the cover or the index
   const removeCount = Math.min(pagesPerSpread(), DATA.pages.length - leftPageIdx);
   if (removeCount <= 0) return;
 
@@ -1901,8 +1999,8 @@ function deleteCurrentSpread(){
 // so a keypress lands on exactly the photo (or empty-page placeholder)
 // whose badge it matches.
 function findBadgeTarget(num){
-  if (spread === 0 || num < 1) return null;
   const leftPageIdx = firstPageOf(spread);
+  if (leftPageIdx < 0 || num < 1) return null; // the cover or the index
   const rightPageIdx = leftPageIdx + 1;
   const leftPage = DATA.pages[leftPageIdx];
   const rightPage = singlePage ? undefined : DATA.pages[rightPageIdx];
@@ -2008,6 +2106,12 @@ function performMoveToEnd(destPageIdx){
 bookEl.addEventListener('click', (e) => {
   if (animating) return;
 
+  const indexEntry = e.target.closest('.index-entry');
+  if (indexEntry){
+    jumpToPage(parseInt(indexEntry.dataset.pageIdx, 10));
+    return;
+  }
+
   const relayoutBtn = e.target.closest('.relayout-btn');
   if (relayoutBtn){
     relayoutPage(parseInt(relayoutBtn.dataset.pageIdx, 10));
@@ -2051,6 +2155,16 @@ function escapeHtml(s){
   d.textContent = s;
   return d.innerHTML;
 }
+
+// The page counter doubles as a way back to the index.
+progressEl.addEventListener('click', () => {
+  if (animating || !hasIndex() || spread === indexSpread()) return;
+  spread = indexSpread();
+  renderSpreadInstant();
+  bookEl.classList.remove('fade-enter');
+  void bookEl.offsetWidth;
+  bookEl.classList.add('fade-enter');
+});
 
 prevBtn.addEventListener('click', () => go(-1));
 nextBtn.addEventListener('click', () => go(1));
@@ -2153,9 +2267,13 @@ fetch('__API_URL__').then(r => r.json()).then(data => {
 function applyPageMode(){
   modeChangePending = false;
   const wasSingle = document.body.classList.contains('single-page');
-  if (wasSingle !== singlePage && spread > 0){
-    const pageIdx = (spread - 1) * (wasSingle ? 1 : 2);
-    spread = spreadOfPage(pageIdx);
+  if (wasSingle !== singlePage){
+    const oldOffset = wasSingle && hasIndex() ? 1 : 0;
+    const pageIdx = (spread - 1 - oldOffset) * (wasSingle ? 1 : 2);
+    if (pageIdx >= 0) spread = spreadOfPage(pageIdx);
+    // Leaving single-page mode from the index page: it lives on the cover
+    // spread there. (The cover itself stays the cover, spread 0.)
+    else if (spread > 0) spread = indexSpread();
   }
   document.body.classList.toggle('single-page', singlePage);
   totalSpreads = countSpreads();
