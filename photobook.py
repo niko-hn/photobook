@@ -679,10 +679,11 @@ HTML_PAGE = """<!doctype html>
     font-size:clamp(20px, 3.2vw, 38px);
     color:var(--ink);
     letter-spacing:-.01em;
-    line-height:1.15;
-    max-height:2.4em;
-    overflow:hidden;
-    margin-bottom:16px;
+    line-height:1.2;
+    /* Never clipped: the whole caption shows and the photos below make
+       room. Clipping to a fixed height cut off descenders (g, p, y) in
+       fonts with tall metrics, like Android's serif fallback. */
+    margin-bottom:14px;
     pointer-events:none;
   }
   .headline-btn{
