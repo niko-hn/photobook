@@ -24,6 +24,7 @@ Options:
 --host HOST      host to bind (default 0.0.0.0)
 --folder PATH    folder of photos to serve (default: current folder)
 --open           open the album in your default browser automatically
+--read-only      just browse: no edit mode, nothing is saved or renamed
 ```
 
 Supported image types: `.jpg .jpeg .png .gif .webp .bmp`
@@ -67,8 +68,9 @@ python3 ../photobook.py --open
   `photobook_state.json` in the served folder, so it's what you'll see next
   time you run the app there. Photos added to the folder later show up as
   new pages appended at the end, without disturbing anything you've laid
-  out. This only works against the live server (`python3 photobook.py`) -
-  a static export has nowhere to save to.
+  out. This only works against the live server (`python3 photobook.py`),
+  and not with `--read-only` - a static export has nowhere to save to, so
+  it's always read-only.
 
   **Every save also renames the photo files on disk** to match reading
   order: `<folder name> 0001.<ext>`, `0002`, and so on (page order, then

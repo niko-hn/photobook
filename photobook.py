@@ -893,6 +893,9 @@ const addSpreadBtn = document.getElementById('addSpreadBtn');
 const deleteSpreadBtn = document.getElementById('deleteSpreadBtn');
 
 const PHOTO_PREFIX = '__PHOTO_PREFIX__';
+// Read-only (--read-only, and every static export): edit mode never turns
+// on, so browsing can't change or save anything.
+const READ_ONLY = __READ_ONLY__;
 
 // A save can rename a file so the same name ends up pointing at different
 // bytes (e.g. two photos swapping places). The browser caches /photo/<name>
@@ -1521,7 +1524,7 @@ function cancelMoveMode(){
 }
 
 function toggleEditMode(){
-  if (animating || lightboxOpen) return;
+  if (READ_ONLY || animating || lightboxOpen) return;
   editMode = !editMode;
   document.body.classList.toggle('edit-mode', editMode);
   if (!editMode){
@@ -2017,10 +2020,17 @@ def rename_photos_to_order(folder: Path, album: dict):
     }
 
 
+def render_page(api_url, photo_prefix, read_only):
+    return (HTML_PAGE.replace("__API_URL__", api_url)
+            .replace("__PHOTO_PREFIX__", photo_prefix)
+            .replace("__READ_ONLY__", "true" if read_only else "false"))
+
+
 class AlbumHandler(BaseHTTPRequestHandler):
     album = None
     photo_index = {}
     folder = None
+    read_only = False
 
     def log_message(self, fmt, *args):
         pass  # keep the console quiet
@@ -2030,7 +2040,7 @@ class AlbumHandler(BaseHTTPRequestHandler):
         path = unquote(parsed.path)
 
         if path == "/":
-            html = HTML_PAGE.replace("__API_URL__", "/api/data").replace("__PHOTO_PREFIX__", "/photo/")
+            html = render_page("/api/data", "/photo/", self.read_only)
             self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/api/data":
             self._send_json(self.album)
@@ -2046,6 +2056,9 @@ class AlbumHandler(BaseHTTPRequestHandler):
 
         if path != "/api/save":
             self.send_error(404, "Not found")
+            return
+        if self.read_only:
+            self._send_json({"ok": False, "error": "read-only"}, status=403)
             return
 
         try:
@@ -2133,7 +2146,8 @@ def export_static(folder: Path, out_dir: Path):
 
     (out_dir / "data.json").write_text(json.dumps(album), encoding="utf-8")
 
-    html = HTML_PAGE.replace("__API_URL__", "./data.json").replace("__PHOTO_PREFIX__", "./photos/")
+    # A static site has nowhere to save edits to, so it's always read-only.
+    html = render_page("./data.json", "./photos/", read_only=True)
     (out_dir / "index.html").write_text(html, encoding="utf-8")
 
     return album
@@ -2158,6 +2172,11 @@ def main():
     parser.add_argument("--host", default="0.0.0.0", help="host to bind (default 0.0.0.0)")
     parser.add_argument("--open", action="store_true", help="open the album in your default browser")
     parser.add_argument("--folder", default=".", help="folder of photos to serve (default: current folder)")
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="just browse: no edit mode, nothing is saved or renamed",
+    )
     parser.add_argument(
         "--export",
         metavar="DIR",
@@ -2186,6 +2205,7 @@ def main():
     AlbumHandler.album = album
     AlbumHandler.photo_index = photo_index
     AlbumHandler.folder = folder
+    AlbumHandler.read_only = args.read_only
 
     port = pick_port(args.host, args.port)
     server = ThreadingHTTPServer((args.host, port), AlbumHandler)
@@ -2194,6 +2214,8 @@ def main():
     url = f"http://{display_host}:{port}/"
     print(f"Photobook for '{folder.name}' ({album['count']} photos)")
     print(f"Serving at {url}  (Ctrl+C to stop)")
+    if args.read_only:
+        print("Read-only: edit mode is off and nothing will be saved.")
 
     if args.open:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
