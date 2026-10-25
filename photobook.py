@@ -481,6 +481,8 @@ HTML_PAGE = """<!doctype html>
     transition:opacity .3s ease;
     z-index:100;
   }
+  #lightbox{ touch-action:none; } /* pinch/pan handled in JS, not by the browser */
+  body.single-page #lightboxFrame{ box-shadow:none; }
   #lightbox.open{
     opacity:1;
     pointer-events:auto;
@@ -1290,8 +1292,15 @@ let lightboxPhotoIdx = null;  // there's no page sequence to navigate from there
 
 // Same polaroid proportions as .frame (8px 8px 22px 8px), scaled up for
 // a full-screen view instead of staying pinned at that fixed pixel size.
+// On a portrait phone (single-page mode) the photo instead fills the
+// screen edge to edge, with no frame.
 function fitFrameRect(naturalW, naturalH){
   const vw = window.innerWidth, vh = window.innerHeight;
+  if (singlePage){
+    const ratio = Math.min(vw / naturalW, vh / naturalH);
+    const w = naturalW * ratio, h = naturalH * ratio;
+    return {top: (vh - h) / 2, left: (vw - w) / 2, width: w, height: h, padding: '0px'};
+  }
   const padX = Math.min(34, Math.max(14, vw * 0.02));
   const padTop = padX;
   const padBottom = padX * 2.6;
@@ -1338,23 +1347,30 @@ function openLightbox(imgEl, pageIdx, photoIdx){
 
   void lightboxFrame.offsetWidth; // force reflow so the next change transitions
 
+  resetZoom(false);
   const onLoad = () => {
-    const target = fitFrameRect(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
     lightboxFrame.style.transition = '';
-    lightboxFrame.style.top = target.top + 'px';
-    lightboxFrame.style.left = target.left + 'px';
-    lightboxFrame.style.width = target.width + 'px';
-    lightboxFrame.style.height = target.height + 'px';
-    lightboxFrame.style.padding = target.padding;
+    fitLightboxFrame();
     lightboxFrame.style.transform = 'rotate(0deg)';
   };
   if (lightboxImg.complete) onLoad();
   else lightboxImg.onload = onLoad;
 }
 
+// Sizes the open lightbox's frame to the current photo and screen.
+function fitLightboxFrame(){
+  const target = fitFrameRect(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
+  lightboxFrame.style.top = target.top + 'px';
+  lightboxFrame.style.left = target.left + 'px';
+  lightboxFrame.style.width = target.width + 'px';
+  lightboxFrame.style.height = target.height + 'px';
+  lightboxFrame.style.padding = target.padding;
+}
+
 function closeLightbox(){
   if (!lightboxOpen) return;
   lightboxOpen = false;
+  resetZoom(false);
 
   const frameEl = lightboxSourceImg ? lightboxSourceImg.closest('.frame') : null;
   const r = (frameEl || lightboxSourceImg) ? (frameEl || lightboxSourceImg).getBoundingClientRect() : null;
@@ -1419,18 +1435,136 @@ function goToLightboxPhoto(pageIdx, photoIdx){
   lightboxSourceRot = parseFloat(frameEl?.dataset.rot || '0');
   lightboxSourcePadding = frameEl ? getComputedStyle(frameEl).padding : lightboxSourcePadding;
 
+  resetZoom(false);
   lightboxImg.src = photoUrl(photo.src);
-  const onLoad = () => {
-    const target = fitFrameRect(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
-    lightboxFrame.style.top = target.top + 'px';
-    lightboxFrame.style.left = target.left + 'px';
-    lightboxFrame.style.width = target.width + 'px';
-    lightboxFrame.style.height = target.height + 'px';
-    lightboxFrame.style.padding = target.padding;
-  };
-  if (lightboxImg.complete) onLoad();
-  else lightboxImg.onload = onLoad;
+  if (lightboxImg.complete) fitLightboxFrame();
+  else lightboxImg.onload = fitLightboxFrame;
 }
+
+// ---- Lightbox touch gestures: pinch to zoom (and drag to pan while
+// zoomed), double-tap to zoom in/out, swipe left/right for the next/previous
+// photo when not zoomed. The zoom is a transform on the <img> alone, so it
+// can spill past the frame across the whole (black) screen. ----
+
+const MAX_ZOOM = 5, DOUBLE_TAP_ZOOM = 2.5, DOUBLE_TAP_MS = 260;
+let zoom = {scale: 1, x: 0, y: 0};  // x/y: pan offset of the image's center, px
+let pinch = null;   // pinch in progress: starting distance, midpoint, zoom
+let pan = null;     // one-finger drag in progress while zoomed
+let lightboxMultiTouch = false;  // this gesture used 2+ fingers - not a swipe
+let lightboxTouchMoved = false;  // this gesture moved - not a tap
+let tapTimer = null;
+
+function applyZoom(animate){
+  lightboxImg.style.transition = animate ? 'transform .25s ease' : 'none';
+  lightboxImg.style.transform = zoom.scale === 1 ? '' : `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`;
+}
+
+function resetZoom(animate){
+  zoom = {scale: 1, x: 0, y: 0};
+  pinch = pan = null;
+  applyZoom(animate);
+}
+
+// The image's untransformed center, in screen coordinates.
+function imageCenter(){
+  const r = lightboxFrame.getBoundingClientRect();
+  return {
+    x: r.left + lightboxImg.offsetLeft + lightboxImg.offsetWidth / 2,
+    y: r.top + lightboxImg.offsetTop + lightboxImg.offsetHeight / 2,
+  };
+}
+
+// Pans no further than it takes to bring an edge of the zoomed image to the
+// edge of the screen (and not at all along a side that still fits).
+function clampPan(){
+  const maxX = Math.max(0, (lightboxImg.offsetWidth * zoom.scale - window.innerWidth) / 2);
+  const maxY = Math.max(0, (lightboxImg.offsetHeight * zoom.scale - window.innerHeight) / 2);
+  zoom.x = Math.max(-maxX, Math.min(maxX, zoom.x));
+  zoom.y = Math.max(-maxY, Math.min(maxY, zoom.y));
+}
+
+// Zooms to 'scale' keeping the image point that was under 'from' (at
+// zoom 'start') under the screen point 'to'.
+function zoomAround(start, from, to, scale){
+  const c = imageCenter();
+  const localX = (from.x - c.x - start.x) / start.scale;
+  const localY = (from.y - c.y - start.y) / start.scale;
+  zoom = {scale, x: to.x - c.x - localX * scale, y: to.y - c.y - localY * scale};
+  clampPan();
+}
+
+function touchDistance(t){ return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY); }
+function touchMidpoint(t){ return {x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2}; }
+
+lightbox.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 1){
+    lightboxMultiTouch = false;
+    lightboxTouchMoved = false;
+  }
+  if (e.touches.length >= 2){
+    e.preventDefault();
+    lightboxMultiTouch = true;
+    pan = null;
+    pinch = {dist: touchDistance(e.touches), mid: touchMidpoint(e.touches), start: {...zoom}};
+  } else if (zoom.scale > 1){
+    pan = {x: e.touches[0].clientX, y: e.touches[0].clientY, start: {...zoom}};
+  }
+}, {passive: false});
+
+lightbox.addEventListener('touchmove', (e) => {
+  e.preventDefault(); // no page scroll or browser zoom while the lightbox is up
+  if (pinch && e.touches.length >= 2){
+    const scale = Math.max(1, Math.min(MAX_ZOOM, pinch.start.scale * touchDistance(e.touches) / pinch.dist));
+    zoomAround(pinch.start, pinch.mid, touchMidpoint(e.touches), scale);
+    applyZoom(false);
+    lightboxTouchMoved = true;
+  } else if (pan){
+    const dx = e.touches[0].clientX - pan.x, dy = e.touches[0].clientY - pan.y;
+    if (Math.abs(dx) + Math.abs(dy) > 6) lightboxTouchMoved = true;
+    zoom = {...pan.start, x: pan.start.x + dx, y: pan.start.y + dy};
+    clampPan();
+    applyZoom(false);
+  }
+}, {passive: false});
+
+lightbox.addEventListener('touchend', (e) => {
+  if (pinch && e.touches.length < 2){
+    pinch = null;
+    if (zoom.scale < 1.05) resetZoom(true);
+    // Lifting one finger of a pinch carries on as a pan with the other.
+    else if (e.touches.length === 1) pan = {x: e.touches[0].clientX, y: e.touches[0].clientY, start: {...zoom}};
+  }
+  if (e.touches.length === 0) pan = null;
+});
+
+// A single tap closes (or, when zoomed in, zooms back out first); a double
+// tap toggles zoom at that spot. Telling them apart means waiting briefly
+// after the first tap.
+lightbox.addEventListener('click', (e) => {
+  if (lightboxTouchMoved){ lightboxTouchMoved = false; return; }
+  if (tapTimer){
+    clearTimeout(tapTimer);
+    tapTimer = null;
+    if (zoom.scale > 1) resetZoom(true);
+    else {
+      const point = {x: e.clientX, y: e.clientY};
+      zoomAround({scale: 1, x: 0, y: 0}, point, point, DOUBLE_TAP_ZOOM);
+      applyZoom(true);
+    }
+    return;
+  }
+  tapTimer = setTimeout(() => {
+    tapTimer = null;
+    if (zoom.scale > 1) resetZoom(true);
+    else closeLightbox();
+  }, DOUBLE_TAP_MS);
+});
+
+window.addEventListener('resize', () => {
+  if (!lightboxOpen) return;
+  resetZoom(false);
+  fitLightboxFrame();
+});
 
 // ---- Edit mode: click the book background or press space to toggle.
 // While on, an "R" button appears on each page to auto-relayout it.
@@ -1789,7 +1923,6 @@ bookEl.addEventListener('click', (e) => {
   toggleEditMode();
 });
 
-lightbox.addEventListener('click', () => closeLightbox());
 
 function escapeHtml(s){
   const d = document.createElement('div');
@@ -1873,7 +2006,10 @@ document.addEventListener('touchend', (e) => {
   const dy = e.changedTouches[0].clientY - touchStartY;
   touchStartX = null;
   if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5){
-    go(dx < 0 ? 1 : -1);
+    if (!lightboxOpen) go(dx < 0 ? 1 : -1);
+    // In the lightbox a swipe steps through the photos - unless it was
+    // really a pinch, or a drag around a zoomed-in photo.
+    else if (!lightboxMultiTouch && zoom.scale === 1) shiftLightboxPhoto(dx < 0 ? 1 : -1);
   }
 }, {passive:true});
 
@@ -1909,6 +2045,11 @@ function applyPageMode(){
   // re-rendered - point it at the new element.
   if (lightboxOpen && lightboxPageIdx !== null){
     lightboxSourceImg = findPhotoImg(lightboxPageIdx, lightboxPhotoIdx) || lightboxSourceImg;
+  }
+  // ...and re-fit it: framed in spreads, edge to edge in single-page mode.
+  if (lightboxOpen){
+    resetZoom(false);
+    fitLightboxFrame();
   }
 }
 
