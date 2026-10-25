@@ -406,13 +406,18 @@ HTML_PAGE = """<!doctype html>
   /* ---- Single-page mode (portrait screens): one page at a time, as a
      centered 2:3 page instead of stretching to the window's full height ---- */
   body.single-page #book{
-    width:min(calc(100vw - 60px), calc((100vh - 35px) * 2 / 3));
-    height:min(calc(100vh - 35px), calc((100vw - 60px) * 3 / 2));
-    width:min(calc(100vw - 60px), calc((100dvh - 35px) * 2 / 3));
-    height:min(calc(100dvh - 35px), calc((100vw - 60px) * 3 / 2));
+    left:10px;
+    right:10px;
+    width:min(calc(100vw - 20px), calc((100vh - 35px) * 2 / 3));
+    height:min(calc(100vh - 35px), calc((100vw - 20px) * 3 / 2));
+    width:min(calc(100vw - 20px), calc((100dvh - 35px) * 2 / 3));
+    height:min(calc(100dvh - 35px), calc((100vw - 20px) * 3 / 2));
     margin:auto;
   }
   body.single-page #book::after{ display:none; }
+  /* Swiping turns the page on a phone; the side arrows would just take
+     width away from it. */
+  body.single-page .nav-btn{ display:none; }
 
   /* ---- Cover ---- */
   .cover-wrap{
