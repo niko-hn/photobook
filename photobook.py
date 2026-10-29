@@ -1237,9 +1237,7 @@ function jumpToPage(pageIdx){
   if (animating || !DATA.pages[pageIdx]) return;
   spread = spreadOfPage(pageIdx);
   renderSpreadInstant();
-  bookEl.classList.remove('fade-enter');
-  void bookEl.offsetWidth; // restart the animation
-  bookEl.classList.add('fade-enter');
+  fadeInBook();
 }
 
 function pageHtml(slot, side){
@@ -1279,7 +1277,75 @@ function updateChrome(){
   indexBtn.classList.toggle('to-index', hasIndex() && spread !== indexSpread());
   addSpreadBtn.disabled = animating;
   deleteSpreadBtn.disabled = animating || firstPageOf(spread) < 0;
+  syncHistory();
 }
+
+// ---- Browser/phone back button: a full-screen photo goes back to its
+// page, an album page back to the index (or the cover, without one), and
+// from there back leaves the album as usual. History holds at most three
+// entries of ours - 'start' (cover/index), 'page', 'photo' - so turning
+// pages never piles up entries: the 'page' entry is just updated. Leaving
+// a level on screen (closing the photo, the contents icon, paging back to
+// the cover) pops its entry, so Back never does nothing. ----
+
+let historyReady = false;  // not until the album is loaded and laid out
+let expectPop = false;     // a history.back() we made ourselves: skip its popstate
+
+function historyView(){ return history.state && history.state.view; }
+
+function setHistory(method, state){
+  try { history[method](state, ''); } catch (e) { /* e.g. a sandboxed frame */ }
+}
+
+function popOurEntry(){
+  expectPop = true;
+  history.back();
+}
+
+function syncHistory(){
+  if (!historyReady || animating || lightboxOpen) return;
+  const pageIdx = firstPageOf(spread);
+  if (pageIdx >= 0){
+    setHistory(historyView() === 'page' ? 'replaceState' : 'pushState', {view: 'page', pageIdx});
+  } else if (historyView() === 'page'){
+    popOurEntry();
+  }
+}
+
+function fadeInBook(){
+  bookEl.classList.remove('fade-enter');
+  void bookEl.offsetWidth; // restart the animation
+  bookEl.classList.add('fade-enter');
+}
+
+// The start of the album: the index if there is one, else the cover.
+function showStart(){
+  spread = hasIndex() ? indexSpread() : 0;
+  renderSpreadInstant();
+  fadeInBook();
+}
+
+function whenIdle(fn){
+  if (animating) setTimeout(() => whenIdle(fn), 100);
+  else fn();
+}
+
+window.addEventListener('popstate', (e) => {
+  if (expectPop){ expectPop = false; return; }
+  if (!DATA || !DATA.count) return;
+  const view = e.state && e.state.view;
+  if (lightboxOpen && view !== 'photo') closeLightbox();
+  if (view === 'photo') return; // forward into a photo already closed: nothing to reopen
+  const onPage = firstPageOf(spread) >= 0;
+  if (view === 'page'){
+    // Forward from the index: back to the page it was on. Back from a
+    // photo: stay on whatever page swiping through photos reached.
+    if (!onPage && DATA.pages[e.state.pageIdx]) whenIdle(() => jumpToPage(e.state.pageIdx));
+    else syncHistory();
+  } else if (onPage){
+    whenIdle(showStart);
+  }
+});
 
 function buildFlipOverlay(dirClass, sideClass, frontSlot, backSlot){
   const overlay = document.createElement('div');
@@ -1463,6 +1529,7 @@ function openLightbox(imgEl, pageIdx, photoIdx){
   lightboxFrame.style.transform = `rotate(${lightboxSourceRot}deg)`;
 
   lightbox.classList.add('open');
+  setHistory('pushState', {view: 'photo', pageIdx: lightboxPageIdx});
   prevBtn.style.visibility = 'hidden';
   nextBtn.style.visibility = 'hidden';
 
@@ -1492,6 +1559,8 @@ function fitLightboxFrame(){
 function closeLightbox(){
   if (!lightboxOpen) return;
   lightboxOpen = false;
+  // Closed on screen (tap, Escape) rather than by Back: drop its entry too.
+  if (historyView() === 'photo') popOurEntry();
   resetZoom(false);
   endSlide();
   lightboxFrame.style.transition = ''; // zoom back out to the page with the usual animation
@@ -2181,11 +2250,7 @@ function escapeHtml(s){
 // The page counter (with its contents icon) is the way back to the index.
 indexBtn.addEventListener('click', () => {
   if (animating || !hasIndex() || spread === indexSpread()) return;
-  spread = indexSpread();
-  renderSpreadInstant();
-  bookEl.classList.remove('fade-enter');
-  void bookEl.offsetWidth;
-  bookEl.classList.add('fade-enter');
+  showStart();
 });
 
 prevBtn.addEventListener('click', () => go(-1));
@@ -2281,6 +2346,15 @@ fetch('__API_URL__').then(r => r.json()).then(data => {
     return;
   }
   applyPageMode();
+  // A reload keeps its history entry: reopen on the page it was showing.
+  const restoreIdx = history.state && history.state.pageIdx;
+  if (restoreIdx != null && DATA.pages[restoreIdx]){
+    jumpToPage(restoreIdx);
+    setHistory('replaceState', {view: 'page', pageIdx: restoreIdx});
+  } else {
+    setHistory('replaceState', {view: 'start'});
+  }
+  historyReady = true;
 });
 
 // Switch between spreads and single pages (e.g. on rotating a phone),

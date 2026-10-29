@@ -109,6 +109,11 @@ python3 ../photobook.py --open
   page, or as its own page right after the cover on a portrait phone. Tap
   an entry to jump straight to that page; tap the contents icon (three
   lines, next to the page counter at the bottom) to get back to the index.
+- **Back button**: the browser's (or phone's) Back steps out one level -
+  from a full-screen photo to its page, from a page to the index (or the
+  cover, if there are no captions), and from there out of the album.
+  Turning pages doesn't add history entries, and a reload stays on the
+  page it was showing.
 - **Adding/removing spreads** (also edit mode): A and D buttons sit at the
   bottom center, next to the page-count readout (press A or D on the
   keyboard instead of clicking if you prefer). A inserts a new, empty
