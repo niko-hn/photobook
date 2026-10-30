@@ -25,6 +25,7 @@ Options:
 --folder PATH    folder of photos to serve (default: current folder)
 --open           open the album in your default browser automatically
 --read-only      just browse: no edit mode, nothing is saved or renamed
+--lang LANG      language of the text viewers see: en (default) or da (Danish)
 ```
 
 Supported image types: `.jpg .jpeg .png .gif .webp .bmp`

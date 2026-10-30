@@ -325,7 +325,7 @@ def get_album(folder: Path):
 
 
 HTML_PAGE = """<!doctype html>
-<html lang="en">
+<html lang="__LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -454,10 +454,14 @@ HTML_PAGE = """<!doctype html>
     height:120px;
   }
   .cover-hint{
+    display:flex;
+    flex-direction:column;
+    gap:4px;
     font-size:12px;
     color:var(--ink-soft);
     letter-spacing:.08em;
   }
+  .cover-hint div:first-child{ margin-bottom:4px; } /* the photo count, a little apart */
 
   /* ---- Index (captions as a table of contents) ---- */
   .index-wrap{
@@ -986,6 +990,32 @@ const PHOTO_PREFIX = '__PHOTO_PREFIX__';
 // on, so browsing can't change or save anything.
 const READ_ONLY = __READ_ONLY__;
 
+// Text viewers see (--lang). The edit-mode tools stay in English. The
+// cover hint is worded for the device: swipes and taps on touch screens,
+// arrow keys and clicks with a mouse.
+const STRINGS = {
+  en: {
+    album: 'Photobook',
+    contents: 'Contents',
+    photos: n => n === 1 ? '1 photo' : `${n} photos`,
+    hintTouch: ['swipe to turn the pages', 'tap a photo to see it full size'],
+    hintPointer: ['turn the pages with the arrow keys', 'click a photo to see it full size'],
+    empty: 'No photos found in this folder.<br>Add some .jpg / .png files and refresh.',
+  },
+  da: {
+    album: 'Fotoalbum',
+    contents: 'Indhold',
+    photos: n => n === 1 ? '1 billede' : `${n} billeder`,
+    hintTouch: ['stryg for at bladre', 'tryk på et billede for at se det stort'],
+    hintPointer: ['bladr med piletasterne', 'klik på et billede for at se det stort'],
+    empty: 'Der er ingen billeder i denne mappe.<br>Læg nogle .jpg- eller .png-filer her, og genindlæs siden.',
+  },
+};
+const T = STRINGS['__LANG__'] || STRINGS.en;
+const TOUCH = window.matchMedia('(pointer: coarse)').matches;
+indexBtn.title = T.contents;
+indexBtn.setAttribute('aria-label', T.contents);
+
 // A save can rename a file so the same name ends up pointing at different
 // bytes (e.g. two photos swapping places). The browser caches /photo/<name>
 // by URL, so without a cache-busting query string a stale cached image can
@@ -1083,10 +1113,10 @@ function coverInner(){
 
   return `
     <div class="cover-wrap">
-      <div class="cover-sub">Photobook</div>
+      <div class="cover-sub">${T.album}</div>
       <div class="cover-title">${escapeHtml(DATA.folder)}</div>
       <div class="cover-thumbs">${thumbs}</div>
-      <div class="cover-hint">${DATA.count} photo${DATA.count === 1 ? '' : 's'} &middot; swipe or press &#8594; to open</div>
+      <div class="cover-hint">${[T.photos(DATA.count), ...(TOUCH ? T.hintTouch : T.hintPointer)].map(line => `<div>${line}</div>`).join('')}</div>
     </div>
   `;
 }
@@ -1226,7 +1256,7 @@ function indexInner(){
        </button></li>`
     : '').join('');
   return `<div class="index-wrap">
-            <div class="index-title">Contents</div>
+            <div class="index-title">${T.contents}</div>
             <ol class="index-list">${entries}</ol>
           </div>`;
 }
@@ -2340,7 +2370,7 @@ fetch('__API_URL__').then(r => r.json()).then(data => {
     bookEl.style.display = 'flex';
     bookEl.style.alignItems = 'center';
     bookEl.style.justifyContent = 'center';
-    bookEl.innerHTML = '<div id="empty">No photos found in this folder.<br>Add some .jpg / .png files and refresh.</div>';
+    bookEl.innerHTML = `<div id="empty">${T.empty}</div>`;
     prevBtn.style.display = 'none';
     nextBtn.style.display = 'none';
     return;
@@ -2495,10 +2525,14 @@ def rename_photos_to_order(folder: Path, album: dict):
     }
 
 
-def render_page(api_url, photo_prefix, read_only):
+LANGUAGES = ("en", "da")  # must match STRINGS in the page's script
+
+
+def render_page(api_url, photo_prefix, read_only, lang="en"):
     return (HTML_PAGE.replace("__API_URL__", api_url)
             .replace("__PHOTO_PREFIX__", photo_prefix)
-            .replace("__READ_ONLY__", "true" if read_only else "false"))
+            .replace("__READ_ONLY__", "true" if read_only else "false")
+            .replace("__LANG__", lang if lang in LANGUAGES else "en"))
 
 
 class AlbumHandler(BaseHTTPRequestHandler):
@@ -2506,6 +2540,7 @@ class AlbumHandler(BaseHTTPRequestHandler):
     photo_index = {}
     folder = None
     read_only = False
+    lang = "en"
 
     def log_message(self, fmt, *args):
         pass  # keep the console quiet
@@ -2515,7 +2550,7 @@ class AlbumHandler(BaseHTTPRequestHandler):
         path = unquote(parsed.path)
 
         if path == "/":
-            html = render_page("/api/data", "/photo/", self.read_only)
+            html = render_page("/api/data", "/photo/", self.read_only, self.lang)
             self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/api/data":
             self._send_json(self.album)
@@ -2601,7 +2636,7 @@ class AlbumHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def export_static(folder: Path, out_dir: Path):
+def export_static(folder: Path, out_dir: Path, lang="en"):
     """Bake a folder's album into a self-contained static site: index.html,
     data.json and a photos/ directory. No server required - works on any
     static host (Netlify, GitHub Pages, S3, a plain file:// open, etc.)."""
@@ -2622,7 +2657,7 @@ def export_static(folder: Path, out_dir: Path):
     (out_dir / "data.json").write_text(json.dumps(album), encoding="utf-8")
 
     # A static site has nowhere to save edits to, so it's always read-only.
-    html = render_page("./data.json", "./photos/", read_only=True)
+    html = render_page("./data.json", "./photos/", read_only=True, lang=lang)
     (out_dir / "index.html").write_text(html, encoding="utf-8")
 
     return album
@@ -2653,6 +2688,12 @@ def main():
         help="just browse: no edit mode, nothing is saved or renamed",
     )
     parser.add_argument(
+        "--lang",
+        choices=LANGUAGES,
+        default="en",
+        help="language of the text viewers see: en (default) or da (Danish)",
+    )
+    parser.add_argument(
         "--export",
         metavar="DIR",
         help="write a self-contained static site (index.html + data.json + photos/) to DIR and exit, instead of serving",
@@ -2666,7 +2707,7 @@ def main():
 
     if args.export:
         out_dir = Path(args.export).resolve()
-        album = export_static(folder, out_dir)
+        album = export_static(folder, out_dir, args.lang)
         print(f"Exported '{folder.name}' ({album['count']} photos) to {out_dir}")
         print(f"Open {out_dir / 'index.html'} in a browser, or deploy the folder to any static host.")
         return
@@ -2681,6 +2722,7 @@ def main():
     AlbumHandler.photo_index = photo_index
     AlbumHandler.folder = folder
     AlbumHandler.read_only = args.read_only
+    AlbumHandler.lang = args.lang
 
     port = pick_port(args.host, args.port)
     server = ThreadingHTTPServer((args.host, port), AlbumHandler)
